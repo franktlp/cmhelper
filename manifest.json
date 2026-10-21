@@ -1,0 +1,12 @@
+{
+  "version": "5.4.28",
+  "chunks": [
+    "chunk-01.txt",
+    "chunk-02.txt",
+    "chunk-03.txt",
+    "chunk-04.txt",
+    "chunk-05.txt",
+    "chunk-06.txt",
+    "chunk-07.txt"
+  ]
+}
