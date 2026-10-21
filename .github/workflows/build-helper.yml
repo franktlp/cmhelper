@@ -26,8 +26,10 @@ jobs:
       - name: Apply pending patch
         shell: bash
         run: |
-          if [ -s pending.patch ]; then
+          if grep -q '^diff --git ' pending.patch 2>/dev/null; then
             git apply --whitespace=nowarn pending.patch
+          else
+            echo "No real patch to apply."
           fi
 
       - name: Validate JavaScript
