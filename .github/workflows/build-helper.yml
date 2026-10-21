@@ -1,0 +1,53 @@
+name: Build Cardmarket Helper
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "pending.patch"
+      - ".github/workflows/build-helper.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct baseline if needed
+        shell: bash
+        run: |
+          if [ ! -f cardmarket-helper.js ]; then
+            python - <<'PY'
+            import base64, gzip, json, pathlib
+            m=json.loads(pathlib.Path('manifest.json').read_text())
+            b64=''.join(pathlib.Path(p).read_text() for p in m['parts'])
+            src=gzip.decompress(base64.b64decode(''.join(b64.split())))
+            pathlib.Path('cardmarket-helper.js').write_bytes(src)
+            PY
+          fi
+
+      - name: Apply pending patch
+        shell: bash
+        run: |
+          if [ -s pending.patch ]; then
+            git apply --whitespace=nowarn pending.patch
+          fi
+
+      - name: Validate JavaScript
+        run: node --check cardmarket-helper.js
+
+      - name: Commit generated source
+        shell: bash
+        run: |
+          : > pending.patch
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cardmarket-helper.js pending.patch
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "Build Cardmarket Helper source"
+          git push
