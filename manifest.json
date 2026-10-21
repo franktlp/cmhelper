@@ -1,12 +1,15 @@
 {
   "version": "5.4.29",
-  "payloadVersion": "5.4.28",
   "encoding": "gzip-base64",
   "parts": [
     "payload-01.txt",
     "payload-02.txt",
     "payload-03.txt",
-    "payload-04.txt",
-    "payload-05.txt"
+    "payload-04a.txt",
+    "payload-04b.txt",
+    "payload-04c.txt",
+    "payload-05a.txt",
+    "payload-05b.txt",
+    "payload-05c.txt"
   ]
 }
