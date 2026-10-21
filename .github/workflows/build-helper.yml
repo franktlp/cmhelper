@@ -20,13 +20,7 @@ jobs:
         shell: bash
         run: |
           if [ ! -f cardmarket-helper.js ]; then
-            python - <<'PY'
-            import base64, gzip, json, pathlib
-            m=json.loads(pathlib.Path('manifest.json').read_text())
-            b64=''.join(pathlib.Path(p).read_text() for p in m['parts'])
-            src=gzip.decompress(base64.b64decode(''.join(b64.split())))
-            pathlib.Path('cardmarket-helper.js').write_bytes(src)
-            PY
+            python -c "import base64,gzip,json,pathlib; m=json.loads(pathlib.Path('manifest.json').read_text()); b64=''.join(pathlib.Path(p).read_text() for p in m['parts']); pathlib.Path('cardmarket-helper.js').write_bytes(gzip.decompress(base64.b64decode(''.join(b64.split()))))"
           fi
 
       - name: Apply pending patch
