@@ -117,15 +117,3 @@ diff --git a/cardmarket-helper.js b/cardmarket-helper.js
              <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Portes €</th>
            </tr>
          </thead>
-@@ -3403,10 +3433,9 @@
-       saveSellers(updated);
-       editor.remove();
- 
--      // v5.4.18: refresh visible cart/plan shipping data immediately.
-       try { refreshCartPackUi(); } catch(e) {}
- 
--      log.textContent = `Portes actualizados. Vendedores modificados: ${changed}\
-+      log.textContent = `Portes actualizados para vendedores del wants actual. Modificados: ${changed}\
- \
- Pulsa "Plan inteligente" para recalcular el plan con los nuevos portes.`;
-     };
