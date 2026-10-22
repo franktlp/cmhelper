@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "5.4.32 Manual Valuation Export";
+  const VERSION = "5.4.33 Rich Diagnostics";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -2190,7 +2190,9 @@
           language:0,
           noPrice:0,
           overMax:0,
-          accepted:0
+          accepted:0,
+          numberMismatch:0,
+          numberMismatchSamples:[]
         };
 
         for(const row of rows){
@@ -2206,6 +2208,7 @@
           let name="";
           let exp="";
           let number="";
+          let urlNumber="";
 
           // v5.4.30: the PRINTED number visible in the seller row is authoritative.
           // Cardmarket has products whose internal URL suffix is off by one from
@@ -2226,7 +2229,7 @@
             const mm=path.match(/-([A-Za-z0-9]+?)(\d{3})(?:\/)?$/);
             if(mm){
               const urlExp=String(mm[1]||"").trim().toUpperCase();
-              const urlNumber=normalizeNum(mm[2]);
+              urlNumber=normalizeNum(mm[2]);
               if(!exp) exp=urlExp;
               if(!number) number=urlNumber;
 
@@ -2251,6 +2254,11 @@
           }
 
           if(!exp || !number){ rejectStats.parseFail++; continue; }
+          if(urlNumber && number && urlNumber!==number){
+            rejectStats.numberMismatch++;
+            if(rejectStats.numberMismatchSamples.length<5)
+              rejectStats.numberMismatchSamples.push(`${exp} visible #${number} / URL #${urlNumber}`);
+          }
           if(!expansionCodesEquivalent(exp, expansion)){
             rejectStats.wrongExpansion++;
             if(!rejectStats.wrongExpansionSamples) rejectStats.wrongExpansionSamples=[];
@@ -2284,7 +2292,9 @@
           const offer={
             name, expansion:exp, number, condition:cond, language,
             quantity:qty, price_eur:price, article_id:extractArticleId(row),
-            url:new URL(a.getAttribute("href"),location.origin).href, page:pageNo
+            url:new URL(a.getAttribute("href"),location.origin).href, page:pageNo,
+            url_number:urlNumber || "",
+            number_mismatch:!!(urlNumber && number && urlNumber!==number)
           };
 
           const old=cheapest[key];
@@ -2309,6 +2319,8 @@
         if(rejectedParts.length) log.textContent += ` · descartes: ${rejectedParts.map(([k,n])=>`${k}:${n}`).join(" ")}`;
         if(rejectStats.wrongExpansionSamples?.length)
           log.textContent += ` · muestra exp: ${rejectStats.wrongExpansionSamples.join(", ")}`;
+        if(rejectStats.numberMismatch)
+          log.textContent += ` · ⚠ numeración URL≠visible: ${rejectStats.numberMismatch}${rejectStats.numberMismatchSamples.length?` (${rejectStats.numberMismatchSamples.join(", ")})`:""}`;
         log.textContent += "\n";
 
         const next=[...doc.querySelectorAll('a[aria-label="Siguiente página"],a[aria-label="Next page"]')]
@@ -2982,12 +2994,17 @@
           number:o.number,
           name:o.name,
           seller:o.seller,
+          country:(sellers[sellerIndex[o.seller]]?.country || ""),
           price_eur:o.price_eur,
           market_ref_eur:val.ref,
           ceiling_eur:val.ceiling,
           verdict:v.status,
           reason:v.reason,
           source:val.refSource,
+          language:o.language,
+          condition:o.condition,
+          url_number:o.url_number || "",
+          number_mismatch:o.number_mismatch ? "YES" : "",
           url:o.url
         });
 
@@ -3534,7 +3551,9 @@ log.textContent += `Cobertura aceptable: ${b.coverage}/${result.targetCount}\n`;
       if (rejected.length) {
         log.textContent += `\nEjemplos descartados:\n`;
         rejected.slice(0,8).forEach(r=>{
-          log.textContent += `- ${r.name} #${r.number}: ${fmt(r.price_eur)} (ref ${fmt(r.market_ref_eur)} · techo ${fmt(r.ceiling_eur)}) · ${r.verdict}\n`;
+          const who=`${r.seller || "?"}${r.country?` [${r.country}]`:""}`;
+          const mismatch=r.number_mismatch ? ` · ⚠ URL #${r.url_number}` : "";
+          log.textContent += `- ${r.name} #${r.number} · ${who}: ${fmt(r.price_eur)} (ref ${fmt(r.market_ref_eur)} · techo ${fmt(r.ceiling_eur)}) · ${r.verdict}${mismatch}\n  ${r.url || ""}\n`;
         });
       }
 
@@ -3836,7 +3855,7 @@ log.textContent += `Cobertura aceptable: ${b.coverage}/${result.targetCount}\n`;
       $("#cm-log").textContent="No hay una valoración disponible. Ejecuta primero Plan inteligente.";
       return;
     }
-    const cols=["key","number","name","seller","price_eur","market_ref_eur","ceiling_eur","verdict","reason","source","url"];
+    const cols=["key","number","name","seller","country","price_eur","market_ref_eur","ceiling_eur","verdict","reason","source","language","condition","url_number","number_mismatch","url"];
     const csv=[cols.join(";"),...rows.map(r=>cols.map(c=>{
       let v=r[c];
       if(typeof v==="number") v=csvDec(v);
