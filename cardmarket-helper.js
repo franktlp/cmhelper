@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "5.4.31 Wants-Aware Shipping Editor";
+  const VERSION = "5.4.32 Manual Valuation Export";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -1262,6 +1262,7 @@
       <button id="cm-run-batch" style="padding:7px 10px">Analizar lista manual</button>
       <button id="cm-edit-shipping" style="padding:7px 10px">Editar portes</button>
       <button id="cm-smart-plan" style="padding:7px 10px;font-weight:700">Plan inteligente</button>
+      <button id="cm-export-valuation" style="padding:7px 10px">Exportar valoración</button>
       <button id="cm-compare" style="padding:7px 10px">Comparar simple</button>
       <div id="cm-cart-pack-box" style="display:none;margin-top:8px;padding:8px;border:1px solid #ccc;border-radius:8px">
         <div style="font-weight:700;margin-bottom:6px">Carrito por vendedor</div>
@@ -3528,15 +3529,6 @@ log.textContent += `Cobertura aceptable: ${b.coverage}/${result.targetCount}\n`;
       const csv=[cols.join(";"),...rows.map(r=>cols.map(c=>csvEscape(r[c]??"")).join(";"))].join("\r\n");
       download(`cardmarket_plan_inteligente_MULTI.csv`,csv);
 
-      // Full audit: every observed offer with verdict/reason
-      const aCols=["key","number","name","seller","price_eur","market_ref_eur","ceiling_eur","verdict","reason","source","url"];
-      const audit=[aCols.join(";"),...result.valuationRows.map(r=>aCols.map(c=>{
-        let v=r[c];
-        if (typeof v==="number") v=csvDec(v);
-        return csvEscape(v??"");
-      }).join(";"))].join("\r\n");
-      download(`cardmarket_valoracion_MULTI.csv`,audit);
-
       const rejected=result.valuationRows.filter(r=>["EXPENSIVE","OUTLIER"].includes(r.verdict));
       log.textContent += `Ofertas descartadas por precio: ${rejected.length}\n`;
       if (rejected.length) {
@@ -3836,6 +3828,22 @@ log.textContent += `Cobertura aceptable: ${b.coverage}/${result.targetCount}\n`;
     } else {
       log.textContent += `\nMás de 18 vendedores guardados: se omite la optimización exacta.\n`;
     }
+  };
+
+  $("#cm-export-valuation").onclick = () => {
+    const rows=lastSmartPlan?.result?.valuationRows || [];
+    if(!rows.length){
+      $("#cm-log").textContent="No hay una valoración disponible. Ejecuta primero Plan inteligente.";
+      return;
+    }
+    const cols=["key","number","name","seller","price_eur","market_ref_eur","ceiling_eur","verdict","reason","source","url"];
+    const csv=[cols.join(";"),...rows.map(r=>cols.map(c=>{
+      let v=r[c];
+      if(typeof v==="number") v=csvDec(v);
+      return csvEscape(v??"");
+    }).join(";"))].join("\r\n");
+    download("cardmarket_valoracion_MULTI.csv",csv);
+    $("#cm-log").textContent=`Valoración exportada: ${rows.length} ofertas analizadas.`;
   };
 
   $("#cm-export").onclick = () => {
