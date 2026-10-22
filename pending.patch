@@ -1,0 +1,128 @@
+diff --git a/cardmarket-helper.js b/cardmarket-helper.js
+--- a/cardmarket-helper.js
++++ b/cardmarket-helper.js
+@@ -3 +3 @@
+-  const VERSION = "5.4.30 Economic Filler + Visible Number Fix";
++  const VERSION = "5.4.31 Wants-Aware Shipping Editor";
+@@ -3321,10 +3321,42 @@
+-  $("#cm-edit-shipping").onclick = () => {
++  $("#cm-edit-shipping").onclick = async () => {
++    const log = $("#cm-log");
++    const wants = await readWants();
++
++    if (!wants.length) {
++      log.textContent = "Carga primero el wants.csv que quieras usar para editar portes.";
++      return;
++    }
++
++    const wantsMap = wantedByKey(wants);
++    const target = new Set(Object.keys(wantsMap));
+     const sellersObj = loadSellers();
+-    const sellers = Object.values(sellersObj).sort((a,b)=>a.seller.localeCompare(b.seller));
+-    const log = $("#cm-log");
++
++    const sellers = Object.values(sellersObj)
++      .map(s => {
++        const bestByKey = {};
++        for (const o of (s.offers || [])) {
++          const k = cardKey(o);
++          const want = wantsMap[k];
++          if (!target.has(k) || !want) continue;
++          if (!languageMatchesWant(o.language,want.language)) continue;
++          if (want.condition && o.condition!==want.condition && !(want.condition==="NM" && o.condition==="MT")) continue;
++          if (Number.isFinite(want.max_price_eur) && Number(o.price_eur)>want.max_price_eur) continue;
++          if (!bestByKey[k] || Number(o.price_eur) < Number(bestByKey[k].price_eur)) bestByKey[k] = o;
++        }
++        const matchedOffers = Object.values(bestByKey);
++        const wantsValue = matchedOffers.reduce((sum,o)=>sum+Number(o.price_eur||0),0);
++        return {...s, matchedOffers, wantsCount:matchedOffers.length, wantsValue};
++      })
++      .filter(s => s.wantsCount > 0)
++      .sort((a,b)=>b.wantsCount-a.wantsCount || a.wantsValue-b.wantsValue || a.seller.localeCompare(b.seller));
++
++    if (!Object.keys(sellersObj).length) {
++      log.textContent = "No hay vendedores guardados.";
++      return;
++    }
+ 
+     if (!sellers.length) {
+-      log.textContent = "No hay vendedores guardados.";
++      log.textContent = `Ningún vendedor guardado tiene cartas compatibles con el wants actual (${wants.length} cartas).`;
+       return;
+     }
+ 
+@@ -3335,33 +3367,31 @@
+     editor.id = "cm-shipping-editor";
+     editor.style.cssText = `
+       position:fixed;z-index:2147483647;top:60px;left:50%;transform:translateX(-50%);
+-      width:min(720px,92vw);max-height:80vh;overflow:auto;background:#fff;color:#111;
++      width:min(760px,92vw);max-height:80vh;overflow:auto;background:#fff;color:#111;
+       border:2px solid #333;border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,.4);
+       padding:16px;font:14px Arial,sans-serif
+     `;
+ 
+-    const rows = sellers.map(s => {
+-      const cardCost = s.offers.reduce((sum,o)=>sum+(o.price_eur||0),0);
+-      return `
+-        <tr>
+-          <td style="padding:6px 8px;border-bottom:1px solid #ddd">${s.seller}</td>
+-          <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:center">${s.country || "??"}</td>
+-          <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:center">${s.status || "COMPLETE"}</td>
+-          <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">${s.offers.length}</td>
+-          <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">${fmt(cardCost)}</td>
+-          <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">
+-            <input data-seller="${s.seller.replace(/"/g,'&quot;')}" class="cm-ship-input"
+-              value="${Number(s.shipping||0).toFixed(2)}"
+-              style="width:80px;padding:4px;text-align:right"> €
+-          </td>
+-        </tr>
+-      `;
+-    }).join("");
++    const rows = sellers.map(s => `
++      <tr>
++        <td style="padding:6px 8px;border-bottom:1px solid #ddd">${s.seller}</td>
++        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:center">${s.country || "??"}</td>
++        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:center">${s.status || "COMPLETE"}</td>
++        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">${s.wantsCount}</td>
++        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">${fmt(s.wantsValue)}</td>
++        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">
++          <input data-seller="${s.seller.replace(/"/g,'&quot;')}" class="cm-ship-input"
++            value="${Number(s.shipping||0).toFixed(2)}"
++            style="width:80px;padding:4px;text-align:right"> €
++        </td>
++      </tr>
++    `).join("");
+ 
+     editor.innerHTML = `
+-      <div style="font-size:18px;font-weight:700;margin-bottom:10px">Editar portes guardados</div>
++      <div style="font-size:18px;font-weight:700;margin-bottom:10px">Editar portes · wants actual</div>
+       <div style="font-size:12px;color:#666;margin-bottom:10px">
+-        Cambiar estos importes NO vuelve a analizar Cardmarket. Solo actualiza el coste de envío usado en la comparativa.
++        Wants cargado: ${wants.length} cartas · mostrando ${sellers.length} vendedores con al menos 1 coincidencia compatible.
++        Cambiar portes NO vuelve a analizar Cardmarket; solo actualiza el coste guardado.
+       </div>
+       <table style="width:100%;border-collapse:collapse">
+         <thead>
+@@ -3369,8 +3399,8 @@
+             <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #333">Vendedor</th>
+             <th style="text-align:center;padding:6px 8px;border-bottom:2px solid #333">País</th>
+             <th style="text-align:center;padding:6px 8px;border-bottom:2px solid #333">Estado</th>
+-            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Cartas</th>
+-            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Cartas €</th>
++            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Cartas wants</th>
++            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Valor wants</th>
+             <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Portes €</th>
+           </tr>
+         </thead>
+@@ -3403,10 +3433,9 @@
+       saveSellers(updated);
+       editor.remove();
+ 
+-      // v5.4.18: refresh visible cart/plan shipping data immediately.
+       try { refreshCartPackUi(); } catch(e) {}
+ 
+-      log.textContent = `Portes actualizados. Vendedores modificados: ${changed}\
++      log.textContent = `Portes actualizados para vendedores del wants actual. Modificados: ${changed}\
+ \
+ Pulsa "Plan inteligente" para recalcular el plan con los nuevos portes.`;
+     };
