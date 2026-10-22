@@ -1,0 +1,24 @@
+diff --git a/cardmarket-helper.js b/cardmarket-helper.js
+--- a/cardmarket-helper.js
++++ b/cardmarket-helper.js
+@@ -3,1 +3,1 @@
+-  const VERSION = "5.4.31 Wants-Aware Shipping Editor";
++  const VERSION = "5.4.32 Manual Valuation Export";
+@@
+       <button id="cm-edit-shipping" style="padding:7px 10px">Editar portes</button>
+       <button id="cm-smart-plan" style="padding:7px 10px;font-weight:700">Plan inteligente</button>
++      <button id="cm-export-valuation" style="padding:7px 10px">Exportar valoración</button>
+       <button id="cm-compare" style="padding:7px 10px">Comparar simple</button>
+@@
+-      // Full audit: every observed offer with verdict/reason
+-      const aCols=["key","number","name","seller","price_eur","market_ref_eur","ceiling_eur","verdict","reason","source","url"];
+-      const audit=[aCols.join(";"),...result.valuationRows.map(r=>aCols.map(c=>{
+-        let v=r[c];
+-        if (typeof v==="number") v=csvDec(v);
+-        return csvEscape(v??"");
+-      }).join(";"))].join("\r\n");
+-      download(`cardmarket_valoracion_MULTI.csv`,audit);
+-
+       const rejected=result.valuationRows.filter(r=>["EXPENSIVE","OUTLIER"].includes(r.verdict));
+@@
+   $("#cm-smart-plan").onclick = async () => {
