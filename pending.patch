@@ -1,9 +1,12 @@
 diff --git a/cardmarket-helper.js b/cardmarket-helper.js
 --- a/cardmarket-helper.js
 +++ b/cardmarket-helper.js
-@@ -3 +3 @@
+@@ -1,4 +1,4 @@
+ 
+ (async () => {
 -  const VERSION = "5.4.30 Economic Filler + Visible Number Fix";
 +  const VERSION = "5.4.31 Wants-Aware Shipping Editor";
+   const STORAGE_KEY = "cm_helper_v540_sellers";
 @@ -3321,10 +3321,42 @@
 -  $("#cm-edit-shipping").onclick = () => {
 +  $("#cm-edit-shipping").onclick = async () => {
