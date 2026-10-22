@@ -9,7 +9,7 @@ diff --git a/cardmarket-helper.js b/cardmarket-helper.js
        <button id="cm-smart-plan" style="padding:7px 10px;font-weight:700">Plan inteligente</button>
 +      <button id="cm-export-valuation" style="padding:7px 10px">Exportar valoración</button>
        <button id="cm-compare" style="padding:7px 10px">Comparar simple</button>
-@@ -3534,10 +3535,0 @@
+@@ -3534,9 +3535,0 @@
 -      // Full audit: every observed offer with verdict/reason
 -      const aCols=["key","number","name","seller","price_eur","market_ref_eur","ceiling_eur","verdict","reason","source","url"];
 -      const audit=[aCols.join(";"),...result.valuationRows.map(r=>aCols.map(c=>{
@@ -19,7 +19,7 @@ diff --git a/cardmarket-helper.js b/cardmarket-helper.js
 -      }).join(";"))].join("\r\n");
 -      download(`cardmarket_valoracion_MULTI.csv`,audit);
 -
-@@ -3848,6 +3839,24 @@
+@@ -3848,6 +3839,22 @@
      }
    };
  
