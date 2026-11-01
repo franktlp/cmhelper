@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cardmarket Helper Loader
 // @namespace    https://github.com/franktlp/cmhelper
-// @version      1.4.4
+// @version      1.4.5
 // @description  Carga automaticamente la ultima version del Cardmarket Helper desde GitHub
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
@@ -27,9 +27,9 @@
     const version=(source.match(/const VERSION = \"([^\"]+)\"/)||[])[1]||'desconocida';
     console.info('Cardmarket Helper loader: cargando v'+version);
     try{
-      await load('cardmarket-id-catalog-v3.js','id-catalog-v3');
+      await load('cardmarket-id-catalog-v4.js','id-catalog-v4');
     }catch(e){
-      console.warn('Cardmarket ID Catalog v3 no se pudo cargar',e);
+      console.warn('Cardmarket ID Catalog v4 no se pudo cargar',e);
     }
   }catch(e){
     console.error('Cardmarket Helper loader error',e);
