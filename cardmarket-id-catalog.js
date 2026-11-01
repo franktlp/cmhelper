@@ -1,13 +1,13 @@
 (() => {
   'use strict';
 
-  const VERSION = '0.3.0';
+  const VERSION = '0.3.1';
   const BANNER_ID = 'cm-id-catalog-banner';
   const STORE_KEY = 'cm_helper_product_id_catalog_v1';
   const EXPANSION_DB_KEY = 'cm_helper_expansion_db';
   const BATCH_SIZE = 35;
   const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const jitter = (base, spread=1200) => Math.max(500, base + Math.floor(Math.random()*spread));
+  const jitter = (base, spread=1000) => Math.max(500, base + Math.floor(Math.random()*spread));
 
   if (!location.hostname.endsWith('cardmarket.com') || !/\/Pokemon\//i.test(location.pathname)) return;
   document.getElementById(BANNER_ID)?.remove();
@@ -186,7 +186,7 @@
     for(let i=0;i<batch.length;i++){
       const p=batch[i];
       status(`Lote ${i+1}/${batch.length} · abriendo ${p.name||'carta'} · quedan ${pending.length-i}`);
-      await sleep(jitter(4200,1800));
+      await sleep(jitter(1500,1000));
       const doc=await fetchDoc(p.url,`ficha ${i+1}/${batch.length}`);
       if(!p.idProduct)p.idProduct=extractProductId(doc);
       if(!p.number)p.number=visiblePrintedNumber(doc,code);
