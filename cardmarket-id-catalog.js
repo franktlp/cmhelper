@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const VERSION='0.6.3';
+  const VERSION='0.6.4';
   const BANNER_ID='cm-id-catalog-banner';
   const STORE_KEY='cm_helper_product_id_catalog_v1';
   const EXPANSION_DB_KEY='cm_helper_expansion_db';
@@ -30,11 +30,17 @@
   function parseTailForCodeNumber(raw){const m=productTail(raw).match(/-([A-Za-z0-9]+?)(\d{3,4}[A-Za-z]?)$/);return m?{code:m[1].toUpperCase(),number:String(parseInt(m[2],10))}:null;}
 
   function inferCode(doc=document,slug=expansionSlugFromUrl()){
-    const db=loadJSON(EXPANSION_DB_KEY,{}),sn=norm(slug);
-    for(const [code,e] of Object.entries(db)){const vals=[e?.slug,e?.name,e?.label].filter(Boolean).map(norm);if(vals.some(v=>v===sn||v.includes(sn)||sn.includes(v)))return String(code).toUpperCase();}
     const text=(doc.body?.innerText||''),counts={};
-    for(const m of text.matchAll(/\b([A-Z0-9]{2,8})\s+0*(\d{1,4})\b/g))counts[m[1]]=(counts[m[1]]||0)+1;
-    return Object.entries(counts).sort((a,b)=>b[1]-a[1])[0]?.[0]||'';
+    for(const m of text.matchAll(/\b([A-Za-z0-9]{2,8})\s+0*(\d{1,4})\b/g)){
+      const raw=m[1],key=raw.toUpperCase();
+      if(!counts[key])counts[key]={count:0,sample:raw};
+      counts[key].count++;
+    }
+    const visible=Object.values(counts).sort((a,b)=>b.count-a.count)[0];
+    if(visible?.sample)return visible.sample;
+    const db=loadJSON(EXPANSION_DB_KEY,{}),sn=norm(slug);
+    for(const [code,e] of Object.entries(db)){const vals=[e?.slug,e?.name,e?.label].filter(Boolean).map(norm);if(vals.some(v=>v===sn||v.includes(sn)||sn.includes(v)))return String(code);}
+    return '';
   }
 
   function visiblePrintedNumber(root,code){const text=(root?.textContent||'').replace(/\s+/g,' '),escaped=String(code||'').replace(/[.*+?^${}()|[\]\\]/g,'\\$&');for(const rx of [new RegExp(`\\(\\s*${escaped}\\s+0*(\\d{1,4}[A-Za-z]?)\\s*\\)`,'i'),new RegExp(`\\b${escaped}\\s*[-#]?\\s*0*(\\d{1,4}[A-Za-z]?)\\b`,'i'),/(?:Card\s*Number|Collector(?:'s)?\s*Number|Número\s+de\s+carta|Numero\s+de\s+carta|Kartennummer)\s*[:#]?\s*0*(\d{1,4}[A-Za-z]?)/i]){const m=text.match(rx);if(m)return String(parseInt(m[1],10));}return '';}
@@ -50,7 +56,7 @@
       let row=a.closest('.row,.product-row,article,li,tr,.table-body,.card,.product')||a.parentElement;
       let visible=visiblePrintedNumber(row||a,code);
       if(!visible){let p=a.parentElement,depth=0;while(p&&p!==doc.body&&depth<6&&!visible){visible=visiblePrintedNumber(p,code);if(visible){row=p;break;}p=p.parentElement;depth++;}}
-      const parsed=parseTailForCodeNumber(canonical),number=visible||(parsed?.code===code?parsed.number:'');
+      const parsed=parseTailForCodeNumber(canonical),number=visible||(parsed?.code===String(code).toUpperCase()?parsed.number:'');
       if(!number)continue;
       const candidate={url:canonical,name:nameFromUrl(canonical,code),number,idProduct:extractProductId(row||a)},old=map.get(canonical);
       map.set(canonical,old?{url:canonical,name:old.name||candidate.name,number:old.number||candidate.number,idProduct:old.idProduct||candidate.idProduct}:candidate);
@@ -89,12 +95,12 @@
   const statusEl=banner.querySelector('#cm-id-catalog-status'),runBtn=banner.querySelector('#cm-id-catalog-run'),rescanBtn=banner.querySelector('#cm-id-catalog-rescan'),status=t=>statusEl.textContent=t;
   banner.querySelector('#cm-id-catalog-close').onclick=()=>banner.remove();
   banner.querySelector('#cm-id-catalog-export').onclick=()=>{const n=exportAll();status(n?`Catálogo completo exportado: ${n} cartas.`:'No hay IDs guardados todavía.');};
-  rescanBtn.onclick=()=>{if(!code)code=inferCode(document,slug)||String(prompt('Código de la colección (ej. DRI):')||'').trim().toUpperCase();if(!code)return;clearProductIndex(code);status('Lista cacheada borrada. Pulsa “Sacar / continuar IDs” para releer la colección.');};
+  rescanBtn.onclick=()=>{if(!code)code=inferCode(document,slug)||String(prompt('Código de la colección (ej. DRI):')||'').trim();if(!code)return;clearProductIndex(code);status('Lista cacheada borrada. Pulsa “Sacar / continuar IDs” para releer la colección.');};
 
   runBtn.onclick=async()=>{
     runBtn.disabled=true;rescanBtn.disabled=true;
     try{
-      code=code||inferCode(document,slug)||String(prompt('Código de la colección (ej. DRI):')||'').trim().toUpperCase();if(!code)throw new Error('Necesito el código.');
+      code=code||inferCode(document,slug)||String(prompt('Código de la colección (ej. DRI):')||'').trim();if(!code)throw new Error('Necesito el código.');
       let products=loadProductIndex(code,slug);
       if(products){status(`Usando lista guardada de ${products.length} cartas. Sin releer páginas.`);}else{products=await collectListingPages(code,status);if(!products.length)throw new Error(`No encuentro cartas ${code}+número en el listado.`);saveProductIndex(code,slug,products);status(`Lista guardada: ${products.length} cartas.`);}
       hydrate(code,slug,products);for(const p of products)if(p.number&&p.idProduct)persistOne(code,slug,p);
