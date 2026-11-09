@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cardmarket Helper BETA Master Sets
 // @namespace    https://github.com/franktlp/cmhelper/beta-master-sets
-// @version      1.4.12-beta
+// @version      1.4.13-beta
 // @description  Carga automaticamente la ultima version del Cardmarket Helper desde GitHub
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
@@ -45,10 +45,14 @@
   });
   const BASE='https://raw.githubusercontent.com/franktlp/cmhelper/feature/master-set-manager/';
   async function load(name,label){
-    const source=await fetch(BASE+name+'?ts='+Date.now(),{cache:'no-store'}).then(r=>{
-      if(!r.ok) throw new Error(label+' HTTP '+r.status);
-      return r.text();
-    });
+    const url=BASE+name+'?ts='+Date.now();
+    const source=await new Promise((resolve,reject)=>GM_xmlhttpRequest({
+      method:'GET',url,timeout:30000,
+      headers:{'Cache-Control':'no-cache, no-store, max-age=0','Pragma':'no-cache'},
+      onload:r=>r.status>=200&&r.status<300?resolve(r.responseText):reject(Error(label+' HTTP '+r.status)),
+      onerror:()=>reject(Error(label+' no se pudo descargar')),
+      ontimeout:()=>reject(Error(label+' tardó demasiado'))
+    }));
     (0,eval)(source+`\n//# sourceURL=${name}`);
     return source;
   }
