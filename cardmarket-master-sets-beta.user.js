@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cardmarket Helper BETA Master Sets
 // @namespace    https://github.com/franktlp/cmhelper/beta-master-sets
-// @version      1.4.10-beta
+// @version      1.4.11-beta
 // @description  Carga automaticamente la ultima version del Cardmarket Helper desde GitHub
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
@@ -50,7 +50,10 @@
     }
     try{
       await load('master-set-data-adapter.js','master data');
-      await load('pokecottage-xlsx-adapter.js','PokéCottage XLSX');
+      try { await load('pokecottage-xlsx-adapter.js','PokéCottage XLSX'); }
+      catch(e) { console.warn('Lector XLSX no disponible; la interfaz seguirá funcionando',e); }
+      try { await load('pokecottage-public-adapter.js','PokéCottage público'); }
+      catch(e) { console.warn('Lector público no disponible; la interfaz seguirá funcionando',e); }
       await load('master-set-ui.js','master UI');
     }catch(e){console.warn('Master Set beta no se pudo cargar',e)}
   }catch(e){
