@@ -8,7 +8,7 @@ function parseWorkbook(arrayBuffer,XLSX,options={}){
   if(!XLSX?.read||!XLSX?.utils?.sheet_to_json)throw Error('Falta la librería XLSX (SheetJS)');
   const wb=XLSX.read(arrayBuffer,{type:'array'});
   const set=options.set||'Mega Evolution';
-  const clean=s=>String(s??'').replace(/\\s+/g,' ').trim();
+  const clean=s=>String(s??'').replace(/\s+/g,' ').trim();
   const norm=s=>clean(s).toLowerCase().replace(/[^a-z0-9#]+/g,' ');
   let candidates=[];
   for(const sheetName of wb.SheetNames){
@@ -27,9 +27,9 @@ function parseWorkbook(arrayBuffer,XLSX,options={}){
     let tier='master',entries=[];
     for(const row of rows.slice(headerIndex+1)){
       const all=row.map(clean).join(' ');
-      if(/promos\\s*(?:&|and)\\s*variants|optional\\s*promos/i.test(all)){tier='grand';continue}
+      if(/promos\s*(?:&|and)\s*variants|optional\s*promos/i.test(all)){tier='grand';continue}
       const number=clean(row[numberIndex]),name=clean(row[nameIndex]),foil=clean(row[foilIndex]),rarity=rarityIndex>=0?clean(row[rarityIndex]):'';
-      if(!number||!name||!/^\\d{1,4}(?:\\/\\d{1,4})?$/.test(number))continue;
+      if(!number||!name||!/^\d{1,4}(?:\/\d{1,4})?$/.test(number))continue;
       const language=/Brazilian Portuguese/i.test(rarity)?'pt':'all';
       const variant=tier==='master'?({'standard':'normal','normal':'normal','holo':'holo','reverse holo':'reverse'}[foil.toLowerCase()]||foil.toLowerCase()):rarity||foil;
       if(!variant)continue;
