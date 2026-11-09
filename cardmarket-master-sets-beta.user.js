@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cardmarket Helper BETA Master Sets
 // @namespace    https://github.com/franktlp/cmhelper/beta-master-sets
-// @version      1.4.13-beta
+// @version      1.4.14-beta
 // @description  Carga automaticamente la ultima version del Cardmarket Helper desde GitHub
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
@@ -45,7 +45,11 @@
   });
   const BASE='https://raw.githubusercontent.com/franktlp/cmhelper/feature/master-set-manager/';
   async function load(name,label){
-    const url=BASE+name+'?ts='+Date.now();
+    const PINNED={
+      'master-set-ui.js':'337d5da0c5af58ef38eed6623916ac78760d4f22',
+      'pokecottage-public-adapter.js':'fe3c2f1058afe28a55d62b5512a2509c3d059b51'
+    };
+    const url=(PINNED[name]?'https://raw.githubusercontent.com/franktlp/cmhelper/'+PINNED[name]+'/':BASE)+name+'?ts='+Date.now();
     const source=await new Promise((resolve,reject)=>GM_xmlhttpRequest({
       method:'GET',url,timeout:30000,
       headers:{'Cache-Control':'no-cache, no-store, max-age=0','Pragma':'no-cache'},
