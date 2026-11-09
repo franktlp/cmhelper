@@ -1,14 +1,13 @@
 // ==UserScript==
 // @name         Cardmarket Helper BETA Master Sets
 // @namespace    https://github.com/franktlp/cmhelper/beta-master-sets
-// @version      1.4.15-beta
+// @version      1.4.16-beta
 // @description  Carga automaticamente la ultima version del Cardmarket Helper desde GitHub
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @connect      pokecottagecdn.com
-// @connect      pokecottage.com
 // @connect      raw.githubusercontent.com
 // @connect      cdn.sheetjs.com
 // @run-at       document-idle
@@ -18,43 +17,33 @@
 // ==/UserScript==
 
 (async()=>{
-  // Only the verified public workbooks can use the privileged bridge.
-  const WORKBOOKS=new Set([
-    'https://pokecottagecdn.com/mastersets/downloads/PokeCottage-MEGA-EVOLUTION-Master-Set-Checklist.xlsx',
-    'https://pokecottagecdn.com/mastersets/downloads/PokeCottage-DESTINED-RIVALS-Master-Set-Checklist.xlsx'
-  ]);
+  // Restrict page requests to public checklist files on this CDN.
+  const workbookURL=/^https:\/\/pokecottagecdn\.com\/mastersets\/downloads\/PokeCottage-[A-Z0-9]+(?:-[A-Z0-9]+)*-Master-Set-Checklist\.xlsx$/;
   const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
   page.__cmMasterFetchPokeCottage=url=>new Promise((resolve,reject)=>{
     if(typeof GM_xmlhttpRequest!=='function'){reject(new Error('Permiso GM_xmlhttpRequest no disponible en Tampermonkey'));return}
-    if(!WORKBOOKS.has(url)){reject(new Error('Checklist de PokéCottage no autorizada'));return}
+    if(typeof url!=='string'||url.length>220||!workbookURL.test(url)){reject(new Error('Checklist de PokéCottage no autorizada'));return}
     GM_xmlhttpRequest({
       method:'GET',url,anonymous:true,responseType:'arraybuffer',timeout:30000,
-      onload:r=>r.status>=200&&r.status<300&&r.response?resolve(r.response):reject(new Error('PokéCottage HTTP '+r.status)),
+      onload:r=>{
+        if(r.finalUrl&&r.finalUrl!==url){reject(Error('PokéCottage redirigió la descarga a otra URL'));return}
+        if(r.status>=200&&r.status<300&&r.response){resolve(r.response);return}
+        const error=Error('PokéCottage HTTP '+r.status);
+        error.status=r.status;
+        reject(error);
+      },
       onerror:()=>reject(new Error('No se pudo conectar con PokéCottage')),
       ontimeout:()=>reject(new Error('PokéCottage no respondió en 30 segundos'))
     });
   });
-  page.__cmMasterFetchPublicGuide=(raw)=>new Promise((resolve,reject)=>{
-    let url;
-    try { url=new URL(raw); } catch { reject(Error('URL de guía inválida')); return; }
-    if(url.origin!=='https://pokecottage.com'||!url.pathname.endsWith('-master-set-guide')||!url.pathname.startsWith('/')){
-      reject(Error('Solo se permiten guías públicas de PokéCottage'));return;
-    }
-    GM_xmlhttpRequest({method:'GET',url:url.href,responseType:'text',timeout:30000,
-      onload:r=>r.status>=200&&r.status<300?resolve(r.responseText):reject(Error('Guía HTTP '+r.status)),
-      onerror:()=>reject(Error('No se pudo obtener la guía pública')),
-      ontimeout:()=>reject(Error('La guía pública tardó demasiado'))
-    });
-  });
   const BASE='https://raw.githubusercontent.com/franktlp/cmhelper/feature/master-set-manager/';
   // Pin matching beta modules together to avoid stale branch CDN responses.
-  const RELEASE='41eeec61a050eebe72a5611afd03f4490d51845b';
+  const RELEASE='d18fc29519560efb2e4072d9ca3e201a3bd34f8e';
   const PINNED={
     'master-set-data-adapter.js':RELEASE,
     'master-set-registry.json':RELEASE,
     'master-set-ui.js':RELEASE,
-    'pokecottage-xlsx-adapter.js':RELEASE,
-    'pokecottage-public-adapter.js':'fe3c2f1058afe28a55d62b5512a2509c3d059b51'
+    'pokecottage-xlsx-adapter.js':RELEASE
   };
   async function load(name,label){
     const url=(PINNED[name]?'https://raw.githubusercontent.com/franktlp/cmhelper/'+PINNED[name]+'/':BASE)+name+'?ts='+Date.now();
@@ -85,8 +74,6 @@
       page.__cmMasterRegistry=registry;
       try { await load('pokecottage-xlsx-adapter.js','PokéCottage XLSX'); }
       catch(e) { console.warn('Lector XLSX no disponible; la interfaz seguirá funcionando',e); }
-      try { await load('pokecottage-public-adapter.js','PokéCottage público'); }
-      catch(e) { console.warn('Lector público no disponible; la interfaz seguirá funcionando',e); }
       await load('master-set-ui.js','master UI');
     }catch(e){console.warn('Master Set beta no se pudo cargar',e)}
   }catch(e){
