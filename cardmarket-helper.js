@@ -2107,16 +2107,10 @@
           !masterCartAttempts.has(cartKey(o))&&!staleIds.has(o.article_id))})).filter(s=>s.offers.length);
         const analysis=available.length?await buildSmartPlan(missing.map(w=>({...w,language})),available):
           {best:null,valued:{},valuationRows:[],cartMaxPrice:getCartMaxPrice()};
-        const {best,valued,valuationRows,cartMaxPrice}=analysis;
+        const {best,valuationRows,cartMaxPrice}=analysis;
         const evaluations=new Map(valuationRows.map(v=>[JSON.stringify([v.seller,v.key]),v]));
         const diagnostics=results.map(seller=>{
-          const eligible=seller.items.filter(o=>{
-            const v=evaluations.get(JSON.stringify([o.seller,o.key]));
-            return v&&["GOOD","OK"].includes(v.verdict)&&!best?.selected?.[o.key];
-          });
           const needsShipping=!best?.sellerUse?.[seller.seller];
-          const failsShipping=needsShipping&&eligible.length>0&&!sellerMarginalOrderAcceptable(seller,
-            eligible.map(o=>[o.key,{...o,valuation:valued[o.key]}]));
           const rows=seller.items.map(o=>{
             const v=evaluations.get(JSON.stringify([o.seller,o.key]));
             const selected=best?.selected?.[o.key];
@@ -2140,9 +2134,6 @@
             }else if(cartMaxPrice!==null&&(best?.total||0)+o.price_eur+(needsShipping?seller.shipping:0)>cartMaxPrice+1e-9){
               status="Superaría el presupuesto al ampliar el plan";
               detail="Presupuesto total de "+fmt(cartMaxPrice);
-            }else if(failsShipping){
-              status="Los portes superan el umbral para las variantes que quedarían por cubrir";
-              detail=fmt(seller.shipping)+" de portes estimados";
             }else status="Oferta válida sin asignar en el reparto";
             return {key:o.key,status,detail};
           });
@@ -3216,7 +3207,8 @@
     const premiumPct = Number.isFinite(premiumInput) ? Math.max(0,premiumInput) : 20;
     const absTol = Number.isFinite(toleranceInput) ? Math.max(0,toleranceInput) : 0.50;
     log.textContent += `Margen de precio: ${premiumPct}% o ${fmt(absTol)}, el mayor de los dos.\n`;
-    log.textContent += `Optimización económica: cartas < 0,50 € pesan progresivamente menos al abrir vendedores nuevos.\n`;
+    if(masterSellers)log.textContent += "Master Sets: prioridad a la cobertura por euro, incluidos los portes.\n";
+    else log.textContent += `Optimización económica: cartas < 0,50 € pesan progresivamente menos al abrir vendedores nuevos.\n`;
     const marketDelay = Math.max(1200, parseInt($("#cm-market-delay").value || "4000",10));
     const cartMaxPrice = getCartMaxPrice();
 
@@ -3352,7 +3344,7 @@
     // value/savings they contribute economically justify their extra shipping.
     let best = null;
 
-    if (sellers.length <= (masterSellers?12:18)) {
+    if (!masterSellers && sellers.length <= 18) {
       const totalMasks = 1 << sellers.length;
 
       for (let mask=1; mask<totalMasks; mask++) {
@@ -3434,6 +3426,22 @@
             const offer = acceptableByKey[k]?.filter(o=>o.seller===s.seller).sort((a,b)=>a.price_eur-b.price_eur)[0];
             if (offer) { added.push([k,offer]); cost += offer.price_eur||0; }
           }
+          if(masterSellers){
+            if(cartMaxPrice!==null&&runningTotal+cost>cartMaxPrice+1e-9){
+              cost=Number(s.shipping||0);
+              added=added.sort(([,a],[,b])=>a.price_eur-b.price_eur).filter(([,o])=>{
+                if(runningTotal+cost+o.price_eur>cartMaxPrice+1e-9)return false;
+                cost+=o.price_eur;
+                return true;
+              });
+            }
+            if(!added.length)continue;
+            const score=added.length/Math.max(cost,0.01);
+            if(!pick||score>pick.score||(score===pick.score&&added.length>pick.added.length)){
+              pick={seller:s.seller,added,cost,score};
+            }
+            continue;
+          }
           if (!added.length) continue;
           if (cartMaxPrice !== null && runningTotal + cost > cartMaxPrice + 1e-9) continue;
           if (!sellerMarginalOrderAcceptable(s, added)) continue;
@@ -3461,17 +3469,18 @@
         const avail=acceptableByKey[k].filter(o=>chosen.includes(o.seller)).sort((a,b)=>a.price_eur-b.price_eur);
         selected[k]=avail[0]; cardCost += avail[0].price_eur||0;
       }
-      const shipCost=chosen.reduce((sum,name)=>sum+Number(sellers.find(s=>s.seller===name)?.shipping||0),0);
-      const total=cardCost+shipCost;
       const sellerUse={};
       for(const o of Object.values(selected)){
         if(!sellerUse[o.seller]) sellerUse[o.seller]={count:0,cost:0};
         sellerUse[o.seller].count++;
         sellerUse[o.seller].cost+=o.price_eur||0;
       }
-      const chosenRecords=sellers.filter(s=>chosen.includes(s.seller));
+      const used=masterSellers?chosen.filter(name=>sellerUse[name]):chosen;
+      const chosenRecords=sellers.filter(s=>used.includes(s.seller));
+      const shipCost=chosenRecords.reduce((sum,s)=>sum+Number(s.shipping||0),0);
+      const total=cardCost+shipCost;
       const effectiveTotal=countryEffectiveCost(total,chosenRecords,sellerUse);
-      best={coverage:Object.keys(selected).length,total,effectiveTotal,cardCost,shipCost,selected,chosen,sellerUse};
+      best={coverage:Object.keys(selected).length,total,effectiveTotal,cardCost,shipCost,selected,chosen:used,sellerUse};
     }
 
     return {
