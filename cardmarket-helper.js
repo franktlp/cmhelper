@@ -1873,6 +1873,8 @@
   }
 
   // Read-only Master Sets scan. Variant offers never enter the legacy seller cache.
+  const masterCartAttempts=new Set();
+  let masterCartBusy=false;
   window.CMHelperSearchMasterOffers = async function ({
     missing, catalog, language, signal, onProgress
   }) {
@@ -1896,6 +1898,7 @@
     const byNumber=new Map();
     const offers=new Map();
     const issues=[];
+    const cartKey=o=>[o.set,o.language,o.key].join("|");
     let checked=0, stopped="";
     const nextLink='a[rel="next"], a[aria-label="Siguiente página"], a[aria-label="Next page"]';
     const nextPage=(doc,url)=>new URL(doc.querySelector(nextLink)?.getAttribute("href")||"",url);
@@ -1975,25 +1978,37 @@
         const ordinary=want.variant==="normal"||want.variant==="holo";
         const reverseFilter=want.variant==="reverse"?"Y":ordinary&&hasReverse?"N":"";
         if(reverseFilter)product.searchParams.set("isReverseHolo",reverseFilter);
-        const doc=await fetchDoc(product);
-        const filter=doc.querySelector('select[name="isReverseHolo"], input[name="isReverseHolo"]:checked');
-        const filterConfirmed=!!reverseFilter&&filter?.value===reverseFilter;
+        const readOffers=doc=>{
+          const filter=doc.querySelector('select[name="isReverseHolo"], input[name="isReverseHolo"]:checked');
+          const filterConfirmed=!!reverseFilter&&filter?.value===reverseFilter;
+          const matches=[];
+          for(const row of doc.querySelectorAll(".article-row")){
+            const finish=finishFromRow(row);
+            const exact=pattern?finish===want.variant:
+              want.variant==="reverse"?finish==="reverse"&&!patterned||!finish&&filterConfirmed&&!patterned:
+              ordinary&&!finish&&!patterned&&(filterConfirmed||!hasReverse&&!filter);
+            if(!exact||!languageMatchesWant(detectOfferLanguage(row),language))continue;
+            const state=row.querySelector(".article-condition .badge")?.textContent.trim();
+            if(!ranks.includes(state)||ranks.indexOf(state)+1>maxCondition)continue;
+            const seller=sellerNameFromRow(row);
+            const price=euro((row.querySelector(".price-container .fw-bold")||
+              row.querySelector(".col-offer .fw-bold")||row.querySelector(".mobile-offer-container .fw-bold"))?.textContent);
+            if(!seller||!Number.isFinite(price)||price<=0||price>cardMax)continue;
+            matches.push({...want,key,seller,price,price_eur:price,url:product.href,condition:state,
+              article_id:extractArticleId(row),country:detectCountryFromElement(row),language:detectOfferLanguage(row)});
+          }
+          return matches;
+        };
+        const verify=async offer=>{
+          const current=readOffers(await fetchDoc(product));
+          return current.some(o=>o.article_id===offer.article_id&&o.seller===offer.seller&&
+            o.price_eur===offer.price_eur&&o.condition===offer.condition);
+        };
         let found=false;
-        for(const row of doc.querySelectorAll(".article-row")){
-          const finish=finishFromRow(row);
-          const exact=pattern?finish===want.variant:
-            want.variant==="reverse"?finish==="reverse"&&!patterned||!finish&&filterConfirmed&&!patterned:
-            ordinary&&!finish&&!patterned&&(filterConfirmed||!hasReverse&&!filter);
-          if(!exact||!languageMatchesWant(detectOfferLanguage(row),language))continue;
-          const state=row.querySelector(".article-condition .badge")?.textContent.trim();
-          if(!ranks.includes(state)||ranks.indexOf(state)+1>maxCondition)continue;
-          const seller=sellerNameFromRow(row);
-          const price=euro((row.querySelector(".price-container .fw-bold")||
-            row.querySelector(".col-offer .fw-bold")||row.querySelector(".mobile-offer-container .fw-bold"))?.textContent);
-          if(!seller||!Number.isFinite(price)||price<=0||price>cardMax)continue;
-          const sellerKey=norm(seller);
+        for(const offer of readOffers(await fetchDoc(product))){
+          const sellerKey=norm(offer.seller);
           const items=offers.get(sellerKey)||new Map();
-          if(!items.has(key)||items.get(key).price>price)items.set(key,{...want,key,seller,price,url:product.href,condition:state});
+          if(!items.has(key)||items.get(key).price>offer.price)items.set(key,{...offer,verify});
           offers.set(sellerKey,items);
           found=true;
         }
@@ -2004,9 +2019,13 @@
       stopped=signal?.aborted?"Búsqueda detenida":e.message;
     }
 
-    const results=[];
+    const results=[],planSellers=[];
+    const staleIds=new Set();
     for(const [sellerKey,items] of offers){
       const shipping=Math.max(0,Number(saved.get(sellerKey)?.shipping??defaultShipping)||0);
+      const eligible=[...items.values()].filter(o=>/^\d+$/.test(o.article_id)&&!masterCartAttempts.has(cartKey(o)));
+      if(eligible.length)planSellers.push({seller:eligible[0].seller,shipping,
+        country:saved.get(sellerKey)?.country||eligible.find(o=>o.country)?.country||"",offers:eligible});
       const selected=[];
       let cents=Math.round(shipping*100);
       for(const item of [...items.values()].sort((a,b)=>a.price-b.price)){
@@ -2018,7 +2037,41 @@
       if(selected.length)results.push({seller:selected[0].seller,items:selected,shipping,total:cents/100});
     }
     results.sort((a,b)=>b.items.length-a.items.length||a.total-b.total||a.seller.localeCompare(b.seller));
-    return {results,checked,issues,stopped,covered:new Set(results.flatMap(s=>s.items.map(o=>o.key))).size};
+    return {results,checked,issues,stopped,
+      analyze:()=>buildSmartPlan(missing.map(w=>({...w,language})),planSellers.map(s=>({...s,offers:s.offers.filter(o=>!masterCartAttempts.has(cartKey(o))&&!staleIds.has(o.article_id))})).filter(s=>s.offers.length)),
+      addPack:async pack=>{
+        if(masterCartBusy)throw Error("Ya se está añadiendo un lote.");
+        const allowed=new Set(planSellers.flatMap(s=>s.offers));
+        const packKeys=new Set();
+        const pending=pack.map(o=>o.original).filter(o=>{
+          if(!allowed.has(o))return false;
+          const key=cartKey(o);
+          if(masterCartAttempts.has(key)||packKeys.has(key)||staleIds.has(o.article_id))return false;
+          packKeys.add(key);
+          return true;
+        });
+        if(!pending.length)return {added:0,skipped:0,stopped:"El lote ya está procesado."};
+        masterCartBusy=true;
+        let added=0,skipped=0,stopped="";
+        try{
+          const token=await getCurrentCartToken(pending[0].url);
+          for(const o of pending){
+            if(!await o.verify(o)){staleIds.add(o.article_id);skipped++;continue}
+            masterCartAttempts.add(cartKey(o));
+            try{
+              await addArticleToCart(o.article_id,token,1,o.url);
+              added++;
+            }catch(e){
+              if(e.cartType==="unavailable"){masterCartAttempts.delete(cartKey(o));staleIds.add(o.article_id);skipped++;continue}
+              throw e;
+            }
+            await sleep(1400);
+          }
+        }catch(e){stopped=e.message}
+        finally{masterCartBusy=false}
+        return {added,skipped,stopped};
+      },
+      covered:new Set(results.flatMap(s=>s.items.map(o=>o.key))).size};
   };
 
   function tokenFromDoc(doc) {
@@ -3041,11 +3094,11 @@
 
 
 
-  async function buildSmartPlan(wants) {
+  async function buildSmartPlan(wants, masterSellers) {
     const log = $("#cm-log");
-    await enrichUnknownSellerCountries();
-    const sellers = Object.values(loadSellers());
-    if (!sellers.length) throw new Error("No hay vendedores guardados.");
+    if(!masterSellers)await enrichUnknownSellerCountries();
+    const sellers = masterSellers||Object.values(loadSellers());
+    if (!sellers.length) throw new Error(masterSellers?"No hay ofertas con ID de artículo para preparar el carrito.":"No hay vendedores guardados.");
 
     const premiumInput = parseFloat($("#cm-premium").value.replace(",","."));
     const toleranceInput = parseFloat($("#cm-abs-tol").value.replace(",","."));
@@ -3056,11 +3109,15 @@
     const marketDelay = Math.max(1200, parseInt($("#cm-market-delay").value || "4000",10));
     const cartMaxPrice = getCartMaxPrice();
 
-    const observations = allObservedOffers();
-    const wantsMap = wantedByKey(wants);
-    const baseOnly = false;
-    let targetKeys = wants.map(w=>cardKey(w)).filter(Boolean);
-    if (baseOnly) targetKeys = targetKeys.filter(k => parseInt(k.split(":").pop(),10) <= 165);
+    const planKey=masterSellers?o=>normalizeNum(o.number)+":"+o.variant:cardKey;
+    const observations=masterSellers?Object.create(null):allObservedOffers();
+    if(masterSellers)for(const seller of sellers){
+      for(const offer of seller.offers){
+        (observations[planKey(offer)]||=[]).push({...offer,original:offer,shipping:seller.shipping});
+      }
+    }
+    const wantsMap=masterSellers?Object.fromEntries(wants.map(w=>[planKey(w),w])):wantedByKey(wants);
+    const targetKeys=wants.map(planKey).filter(Boolean);
     const target = new Set(targetKeys.length ? targetKeys : Object.keys(observations));
 
     // Value each exact expansion+number appearing in seller observations.
@@ -3092,7 +3149,7 @@
         cheapest.price_eur >= 0.50 ||
         spreadRatio >= 1.5;
 
-      if (needMarket) {
+      if (needMarket&&!masterSellers) {
         log.textContent += `Valorando ${cheapest.name} (${k}) [${idx+1}/${keys.length}]...\n`;
         log.scrollTop = log.scrollHeight;
         try {
@@ -3184,7 +3241,7 @@
     // value/savings they contribute economically justify their extra shipping.
     let best = null;
 
-    if (sellers.length <= 18) {
+    if (sellers.length <= (masterSellers?12:18)) {
       const totalMasks = 1 << sellers.length;
 
       for (let mask=1; mask<totalMasks; mask++) {
