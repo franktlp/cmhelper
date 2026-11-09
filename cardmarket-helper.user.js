@@ -1,15 +1,18 @@
 // ==UserScript==
 // @name         Cardmarket Helper Loader
 // @namespace    https://github.com/franktlp/cmhelper
-// @version      1.4.7-beta
+// @version      1.4.8-beta
 // @description  Carga automaticamente la ultima version del Cardmarket Helper desde GitHub
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
-// @grant        none
+// @grant        GM_xmlhttpRequest
+// @connect      pokecottagecdn.com
+// @connect      raw.githubusercontent.com
+// @connect      cdn.sheetjs.com
 // @run-at       document-idle
 // @noframes
-// @updateURL    https://raw.githubusercontent.com/franktlp/cmhelper/main/cardmarket-helper.user.js
-// @downloadURL  https://raw.githubusercontent.com/franktlp/cmhelper/main/cardmarket-helper.user.js
+// @updateURL    https://raw.githubusercontent.com/franktlp/cmhelper/feature/master-set-manager/cardmarket-helper.user.js
+// @downloadURL  https://raw.githubusercontent.com/franktlp/cmhelper/feature/master-set-manager/cardmarket-helper.user.js
 // ==/UserScript==
 
 (async()=>{
