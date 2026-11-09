@@ -25,9 +25,15 @@ function parseHTML(html,options={}){
     }
   }
   const expected=options.expectedMaster;
-  if(expected!=null&&entries.length!==expected)throw Error('Tabla pública incompleta: '+entries.length+' variantes de '+expected+' esperadas. No se guardó nada.');
+  if(expected!=null&&entries.length!==expected){
+    const tables=doc.querySelectorAll('table').length;
+    const rows=doc.querySelectorAll('table tr').length;
+    const scripts=doc.querySelectorAll('script').length;
+    const links=[...doc.querySelectorAll('a[href]')].filter(a=>/xlsx|checklist|download/i.test(a.href)).length;
+    throw Error('La página no expone una tabla compatible ('+entries.length+'/'+expected+' variantes; tablas: '+tables+', filas: '+rows+', scripts: '+scripts+', enlaces de descarga: '+links+'). No se guardó nada.');
+  }
   if(!entries.length)throw Error('No se encontraron filas de checklist en las tablas públicas');
   return {entries,counts:{master:entries.length,grand:entries.length,optional:0},source:options.url||'',parsedAt:new Date().toISOString(),verified:expected!=null};
 }
-window.CMPokeCottagePublic={parseHTML,version:'0.1.0'};
+window.CMPokeCottagePublic={parseHTML,version:'0.1.1'};
 })();
