@@ -1934,17 +1934,40 @@
       return new DOMParser().parseFromString(html,"text/html");
     }
 
+    function reverseFlag(value){
+      const flag=norm(value);
+      if(["y","yes","si","true","1"].includes(flag))return "Y";
+      if(["n","no","false","0"].includes(flag))return "N";
+      return "";
+    }
+
     function finishFromRow(row){
-      // Use article metadata. Seller comments are free text and cannot establish a finish.
-      const cells=row.querySelectorAll(".article-attributes, .article-condition, .article-extra, .article-extras");
-      const labels=[...cells].flatMap(cell=>[cell,...cell.querySelectorAll("[title],[aria-label],[data-bs-original-title],[data-original-title],[alt]")])
-        .flatMap(el=>["title","aria-label","data-bs-original-title","data-original-title","alt"].map(a=>el.getAttribute(a))).filter(Boolean);
-      const text=norm(labels.join(" "));
+      // Seller comments are free text and cannot establish a finish.
+      const attrs=["title","aria-label","data-bs-title","data-bs-original-title","data-original-title",
+        "data-tooltip","alt","class","href","xlink:href","data-is-reverse-holo","data-reverse-holo"];
+      const labels=[];
+      let flag="";
+      for(const el of [row,...row.querySelectorAll(attrs.map(attr=>"["+CSS.escape(attr)+"]").join(","))]){
+        if(el.closest('.article-comments, .article-comment, .article-description, .seller-comment, [class*="comment" i]'))continue;
+        flag||=reverseFlag(el.getAttribute("data-is-reverse-holo")||el.getAttribute("data-reverse-holo"));
+        for(const attr of attrs){
+          if((attr==="href"||attr==="xlink:href")&&el.localName!=="use")continue;
+          labels.push(el.getAttribute(attr));
+        }
+      }
+      const text=norm(labels.join(" ")).replace(/[-_]/g," ");
       if(/master\s*ball/.test(text))return "master ball";
       if(/poke\s*ball/.test(text))return "poké ball";
-      if(/reverse holo|holo invers[ao]|\breverse\b/.test(text))return "reverse";
-      if(/cosmos|stamped|sello|first edition/.test(text))return "other";
+      if(/cosmos|stamped|\bsello\b|first edition/.test(text))return "other";
+      if(flag==="N"||/non reverse|not reverse|no reverse|sin reverse/.test(text))return "regular";
+      if(flag==="Y"||/reverse holo|holo invers[ao]|reverseholo|icon reverse\b/.test(text))return "reverse";
       return "";
+    }
+
+    function selectedReverseFilter(doc){
+      const controls=doc.querySelectorAll('select[name="isReverseHolo" i], input[name="isReverseHolo" i]:checked, input[name="isReverseHolo" i][type="hidden"]');
+      const selected=new Set([...controls].map(control=>reverseFlag(control.value)).filter(Boolean));
+      return selected.size===1?[...selected][0]:"";
     }
 
     try {
@@ -1996,16 +2019,34 @@
         const ordinary=want.variant==="normal"||want.variant==="holo";
         const reverseFilter=want.variant==="reverse"?"Y":ordinary&&hasReverse?"N":"";
         if(reverseFilter)product.searchParams.set("isReverseHolo",reverseFilter);
-        const readOffers=doc=>{
-          const filter=doc.querySelector('select[name="isReverseHolo"], input[name="isReverseHolo"]:checked');
-          const filterConfirmed=!!reverseFilter&&filter?.value===reverseFilter;
+        let noOfferReason="Cardmarket no devolvió ofertas en la primera página";
+        const readOffers=async()=>{
+          const doc=await fetchDoc(product);
+          const rows=[...doc.querySelectorAll(".article-row")].map(row=>({
+            row,finish:finishFromRow(row),id:extractMasterArticleId(row)
+          }));
+          if(!rows.length)return [];
+          const applied=selectedReverseFilter(doc);
+          let filterConfirmed=!!reverseFilter&&applied===reverseFilter;
+          // Some pages omit the selected filter in their HTML. Check whether
+          // switching only the reverse filter separates the exact article IDs.
+          if(reverseFilter&&!applied&&!patterned&&!rows.some(r=>r.finish)&&rows.some(r=>r.id)){
+            const opposite=new URL(product);
+            opposite.searchParams.set("isReverseHolo",reverseFilter==="Y"?"N":"Y");
+            const comparison=await fetchDoc(opposite);
+            const ids=new Set([...comparison.querySelectorAll(".article-row")].map(extractMasterArticleId).filter(Boolean));
+            filterConfirmed=ids.size>0&&rows.every(r=>r.id&&!ids.has(r.id));
+          }
           const matches=[];
-          for(const row of doc.querySelectorAll(".article-row")){
-            const finish=finishFromRow(row);
+          noOfferReason="No pude verificar el acabado en las ofertas de la primera página";
+          for(const {row,finish,id} of rows){
             const exact=pattern?finish===want.variant:
-              want.variant==="reverse"?finish==="reverse"&&!patterned||!finish&&filterConfirmed&&!patterned:
-              ordinary&&!finish&&!patterned&&(filterConfirmed||!hasReverse&&!filter);
-            if(!exact||!languageMatchesWant(detectOfferLanguage(row),language))continue;
+              want.variant==="reverse"?(!patterned&&(finish==="reverse"||!finish&&filterConfirmed)):
+              ordinary&&!patterned&&(finish==="regular"||!finish&&(filterConfirmed||!hasReverse));
+            if(!exact)continue;
+            if(!matches.length)noOfferReason="Acabado localizado, pero sin oferta que cumpla idioma, estado y precio";
+            const offerLanguage=detectOfferLanguage(row);
+            if(!languageMatchesWant(offerLanguage,language))continue;
             const state=row.querySelector(".article-condition .badge")?.textContent.trim();
             if(!ranks.includes(state)||ranks.indexOf(state)+1>maxCondition)continue;
             const seller=sellerNameFromRow(row);
@@ -2013,17 +2054,17 @@
               row.querySelector(".col-offer .fw-bold")||row.querySelector(".mobile-offer-container .fw-bold"))?.textContent);
             if(!seller||!Number.isFinite(price)||price<=0||price>cardMax)continue;
             matches.push({...want,key,seller,price,price_eur:price,url:product.href,condition:state,
-              article_id:extractMasterArticleId(row),country:detectCountryFromElement(row),language:detectOfferLanguage(row)});
+              article_id:id,country:detectCountryFromElement(row),language:offerLanguage});
           }
           return matches;
         };
         const verify=async offer=>{
-          const current=readOffers(await fetchDoc(product));
+          const current=await readOffers();
           return current.some(o=>o.article_id===offer.article_id&&o.seller===offer.seller&&
             o.price_eur===offer.price_eur&&o.condition===offer.condition);
         };
         let found=false;
-        for(const offer of readOffers(await fetchDoc(product))){
+        for(const offer of await readOffers()){
           const sellerKey=norm(offer.seller);
           const items=offers.get(sellerKey)||new Map();
           if(!items.has(key)||items.get(key).price>offer.price)items.set(key,{...offer,verify});
@@ -2035,7 +2076,7 @@
           }
           found=true;
         }
-        if(!found)issues.push({...want,reason:"Sin oferta verificable en la primera página"});
+        if(!found)issues.push({...want,reason:noOfferReason});
         checked++;
       }
     } catch(e){
