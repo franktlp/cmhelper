@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cardmarket Helper BETA Master Sets
 // @namespace    https://github.com/franktlp/cmhelper/beta-master-sets
-// @version      1.4.14-beta
+// @version      1.4.15-beta
 // @description  Carga automaticamente la ultima version del Cardmarket Helper desde GitHub
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
@@ -18,14 +18,17 @@
 // ==/UserScript==
 
 (async()=>{
-  // Stable, narrow privileged bridge: page modules never receive the GM API.
-  // Only the official PokéCottage checklist can be requested.
-  const POKECOTTAGE_URL='https://pokecottagecdn.com/mastersets/downloads/PokeCottage-MEGA-EVOLUTION-Master-Set-Checklist.xlsx';
+  // Only the verified public workbooks can use the privileged bridge.
+  const WORKBOOKS=new Set([
+    'https://pokecottagecdn.com/mastersets/downloads/PokeCottage-MEGA-EVOLUTION-Master-Set-Checklist.xlsx',
+    'https://pokecottagecdn.com/mastersets/downloads/PokeCottage-DESTINED-RIVALS-Master-Set-Checklist.xlsx'
+  ]);
   const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
-  page.__cmMasterFetchPokeCottage=()=>new Promise((resolve,reject)=>{
+  page.__cmMasterFetchPokeCottage=url=>new Promise((resolve,reject)=>{
     if(typeof GM_xmlhttpRequest!=='function'){reject(new Error('Permiso GM_xmlhttpRequest no disponible en Tampermonkey'));return}
+    if(!WORKBOOKS.has(url)){reject(new Error('Checklist de PokéCottage no autorizada'));return}
     GM_xmlhttpRequest({
-      method:'GET',url:POKECOTTAGE_URL,responseType:'arraybuffer',timeout:30000,
+      method:'GET',url,anonymous:true,responseType:'arraybuffer',timeout:30000,
       onload:r=>r.status>=200&&r.status<300&&r.response?resolve(r.response):reject(new Error('PokéCottage HTTP '+r.status)),
       onerror:()=>reject(new Error('No se pudo conectar con PokéCottage')),
       ontimeout:()=>reject(new Error('PokéCottage no respondió en 30 segundos'))
@@ -44,11 +47,16 @@
     });
   });
   const BASE='https://raw.githubusercontent.com/franktlp/cmhelper/feature/master-set-manager/';
+  // Pin matching beta modules together to avoid stale branch CDN responses.
+  const RELEASE='41eeec61a050eebe72a5611afd03f4490d51845b';
+  const PINNED={
+    'master-set-data-adapter.js':RELEASE,
+    'master-set-registry.json':RELEASE,
+    'master-set-ui.js':RELEASE,
+    'pokecottage-xlsx-adapter.js':RELEASE,
+    'pokecottage-public-adapter.js':'fe3c2f1058afe28a55d62b5512a2509c3d059b51'
+  };
   async function load(name,label){
-    const PINNED={
-      'master-set-ui.js':'337d5da0c5af58ef38eed6623916ac78760d4f22',
-      'pokecottage-public-adapter.js':'fe3c2f1058afe28a55d62b5512a2509c3d059b51'
-    };
     const url=(PINNED[name]?'https://raw.githubusercontent.com/franktlp/cmhelper/'+PINNED[name]+'/':BASE)+name+'?ts='+Date.now();
     const source=await new Promise((resolve,reject)=>GM_xmlhttpRequest({
       method:'GET',url,timeout:30000,
@@ -57,6 +65,7 @@
       onerror:()=>reject(Error(label+' no se pudo descargar')),
       ontimeout:()=>reject(Error(label+' tardó demasiado'))
     }));
+    if(name.endsWith('.json'))return JSON.parse(source);
     (0,eval)(source+`\n//# sourceURL=${name}`);
     return source;
   }
@@ -71,6 +80,9 @@
     }
     try{
       await load('master-set-data-adapter.js','master data');
+      const registry=await load('master-set-registry.json','master registry');
+      if(!Array.isArray(registry.sets))throw Error('Registro de Master Sets inválido');
+      page.__cmMasterRegistry=registry;
       try { await load('pokecottage-xlsx-adapter.js','PokéCottage XLSX'); }
       catch(e) { console.warn('Lector XLSX no disponible; la interfaz seguirá funcionando',e); }
       try { await load('pokecottage-public-adapter.js','PokéCottage público'); }
