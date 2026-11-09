@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "updated": "2026-11-09",
+  "sets": [
+    {
+      "id": "Mega Evolution",
+      "cardmarketSlugs": [
+        "Mega-Evolution"
+      ],
+      "tcgcollectorExpansion": "Mega Evolution",
+      "source": {
+        "kind": "pokecottage-xlsx",
+        "url": "https://pokecottagecdn.com/mastersets/downloads/PokeCottage-MEGA-EVOLUTION-Master-Set-Checklist.xlsx",
+        "fetchBridge": "legacy-mega"
+      },
+      "counts": {
+        "master": 310,
+        "grand": 427
+      },
+      "status": "verified"
+    }
+  ]
+}
