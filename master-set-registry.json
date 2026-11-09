@@ -18,6 +18,36 @@
         "grand": 427
       },
       "status": "verified"
+    },
+    {
+      "id": "Destined Rivals",
+      "cardmarketSlugs": [
+        "Destined-Rivals"
+      ],
+      "tcgcollectorExpansion": "Destined Rivals",
+      "source": {
+        "kind": "pokecottage-guide",
+        "page": "https://pokecottage.com/destined-rivals-master-set-guide"
+      },
+      "counts": {
+        "master": 409
+      },
+      "status": "pending-xlsx-verification"
+    },
+    {
+      "id": "Phantasmal Flames",
+      "cardmarketSlugs": [
+        "Phantasmal-Flames"
+      ],
+      "tcgcollectorExpansion": "Phantasmal Flames",
+      "source": {
+        "kind": "pokecottage-guide",
+        "page": "https://pokecottage.com/phantasmal-flames-master-set-guide"
+      },
+      "counts": {
+        "master": 214
+      },
+      "status": "pending-xlsx-verification"
     }
   ]
 }
