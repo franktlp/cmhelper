@@ -10,8 +10,7 @@
       "tcgcollectorExpansion": "Mega Evolution",
       "source": {
         "kind": "pokecottage-xlsx",
-        "url": "https://pokecottagecdn.com/mastersets/downloads/PokeCottage-MEGA-EVOLUTION-Master-Set-Checklist.xlsx",
-        "fetchBridge": "legacy-mega"
+        "url": "https://pokecottagecdn.com/mastersets/downloads/PokeCottage-MEGA-EVOLUTION-Master-Set-Checklist.xlsx"
       },
       "counts": {
         "master": 310,
@@ -26,13 +25,13 @@
       ],
       "tcgcollectorExpansion": "Destined Rivals",
       "source": {
-        "kind": "pokecottage-guide",
-        "page": "https://pokecottage.com/destined-rivals-master-set-guide"
+        "kind": "pokecottage-xlsx",
+        "url": "https://pokecottagecdn.com/mastersets/downloads/PokeCottage-DESTINED-RIVALS-Master-Set-Checklist.xlsx"
       },
       "counts": {
         "master": 409
       },
-      "status": "pending-xlsx-verification"
+      "status": "verified"
     },
     {
       "id": "Phantasmal Flames",
