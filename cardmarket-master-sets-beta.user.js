@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cardmarket Helper BETA Master Sets
 // @namespace    https://github.com/franktlp/cmhelper/beta-master-sets
-// @version      1.4.20-beta
+// @version      1.4.21-beta
 // @description  Carga automaticamente la ultima version del Cardmarket Helper desde GitHub
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
@@ -38,7 +38,7 @@
   });
   const BASE='https://raw.githubusercontent.com/franktlp/cmhelper/feature/master-set-manager/';
   // Pin matching beta modules together to avoid stale branch CDN responses.
-  const RELEASE='5a9c1e267ef974899f15403b00f401275d14dd72';
+  const RELEASE='060efa02905ea90a14916ad9d90db6b7a00f1e08';
   const PINNED={
     'cardmarket-helper.js':RELEASE,
     'master-set-data-adapter.js':RELEASE,
