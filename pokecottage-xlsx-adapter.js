@@ -6,6 +6,15 @@
 const SOURCE='https://pokecottagecdn.com/mastersets/downloads/PokeCottage-MEGA-EVOLUTION-Master-Set-Checklist.xlsx';
 function parseWorkbook(arrayBuffer,XLSX){if(!XLSX?.read||!XLSX?.utils?.sheet_to_json)throw Error('Falta la librería XLSX (SheetJS)');const wb=XLSX.read(arrayBuffer,{type:'array'});const sheet=wb.Sheets['Mega Evolution Master Set']||wb.Sheets[wb.SheetNames[0]];if(!sheet)throw Error('No existe la hoja de checklist');const rows=XLSX.utils.sheet_to_json(sheet,{header:1,defval:''});const header=rows[0].map(v=>String(v).trim());if(header[1]!=='Card #'||header[2]!=='Card Name'||header[3]!=='Rarity'||header[4]!=='Foil')throw Error('El formato de PokéCottage ha cambiado');let tier='master';const entries=[];for(const row of rows.slice(1)){if(String(row[0]).includes('Promos & Variants')){tier='grand';continue}const number=String(row[1]||'').trim(),name=String(row[2]||'').trim(),rarity=String(row[3]||'').trim(),foil=String(row[4]||'').trim();if(!number||!name)continue;const language=/Brazilian Portuguese/i.test(rarity)?'pt':'all';const variant=tier==='master'?({Standard:'normal',Holo:'holo','Reverse Holo':'reverse'}[foil]||foil.toLowerCase()):rarity;entries.push({set:'Mega Evolution',number,name,variant,tier,language,rarity,foil,detail:tier==='grand'?rarity:'',source:'pokecottage'})}
 const master=entries.filter(x=>x.tier==='master').length,grand=entries.length;if(master!==310)throw Error('Catálogo Master incompleto: '+master+' filas, se esperaban 310');if(grand<master)throw Error('Grand Master inválido');return {entries,counts:{master,grand,optional:grand-master},source:SOURCE,parsedAt:new Date().toISOString(),verified:true}}
-async function fetchAndParse(XLSX){const response=await fetch(SOURCE,{cache:'no-cache'});if(!response.ok)throw Error('PokéCottage HTTP '+response.status);return parseWorkbook(await response.arrayBuffer(),XLSX)}
+async function fetchAndParse(XLSX){
+  if(typeof GM_xmlhttpRequest!=='function')throw Error('Instala de nuevo el loader beta: falta el permiso GM_xmlhttpRequest');
+  const bytes=await new Promise((resolve,reject)=>GM_xmlhttpRequest({
+    method:'GET',url:SOURCE,responseType:'arraybuffer',timeout:30000,
+    onload:r=>r.status>=200&&r.status<300&&r.response?resolve(r.response):reject(Error('PokéCottage HTTP '+r.status)),
+    onerror:()=>reject(Error('No se pudo descargar PokéCottage (conexión o permisos de Tampermonkey)')),
+    ontimeout:()=>reject(Error('PokéCottage no respondió en 30 segundos'))
+  }));
+  return parseWorkbook(bytes,XLSX)
+}
 window.CMPokeCottageXLSX={source:SOURCE,parseWorkbook,fetchAndParse,version:'0.1.0'};
 })();
