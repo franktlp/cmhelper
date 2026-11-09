@@ -30,10 +30,15 @@ function parseHTML(html,options={}){
     const rows=doc.querySelectorAll('table tr').length;
     const scripts=doc.querySelectorAll('script').length;
     const links=[...doc.querySelectorAll('a[href]')].filter(a=>/xlsx|checklist|download/i.test(a.href)).length;
-    throw Error('La página no expone una tabla compatible ('+entries.length+'/'+expected+' variantes; tablas: '+tables+', filas: '+rows+', scripts: '+scripts+', enlaces de descarga: '+links+'). No se guardó nada.');
+    const probes=[...doc.querySelectorAll('[data-item-id],[data-card-number],[data-card-id],[data-collection-item-id],[data-controller],[data-block-type]')];
+    const kinds={};for(const node of probes){const k=node.tagName.toLowerCase()+':'+(node.getAttribute('data-block-type')||node.getAttribute('data-controller')||'item');kinds[k]=(kinds[k]||0)+1;}
+    const jsonScripts=[...doc.querySelectorAll('script')].filter(s=>s.type.includes('json')).length;
+    const cardMatches=(html.match(/Team Rocket|Cynthia|Ethan|Mewtwo|Garchomp/gi)||[]).length;
+    const scriptHits=[...doc.querySelectorAll('script')].filter(s=>/checklist|cardlist|card-list|variants|squarespace/i.test(s.textContent)).length;
+    throw Error('La página no expone una tabla compatible ('+entries.length+'/'+expected+' variantes; tablas: '+tables+', filas: '+rows+', scripts: '+scripts+', enlaces de descarga: '+links+', bloques: '+probes.length+', tipos: '+JSON.stringify(kinds).slice(0,180)+', scripts JSON: '+jsonScripts+', scripts relevantes: '+scriptHits+', menciones cartas: '+cardMatches+'). No se guardó nada.');
   }
   if(!entries.length)throw Error('No se encontraron filas de checklist en las tablas públicas');
   return {entries,counts:{master:entries.length,grand:entries.length,optional:0},source:options.url||'',parsedAt:new Date().toISOString(),verified:expected!=null};
 }
-window.CMPokeCottagePublic={parseHTML,version:'0.1.1'};
+window.CMPokeCottagePublic={parseHTML,version:'0.1.2'};
 })();
