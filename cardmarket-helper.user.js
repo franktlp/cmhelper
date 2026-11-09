@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         Cardmarket Helper Loader
-// @namespace    https://github.com/franktlp/cmhelper
-// @version      1.4.9-beta
+// @name         Cardmarket Helper BETA Master Sets
+// @namespace    https://github.com/franktlp/cmhelper/beta-master-sets
+// @version      1.4.10-beta
 // @description  Carga automaticamente la ultima version del Cardmarket Helper desde GitHub
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
