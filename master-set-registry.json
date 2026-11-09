@@ -39,14 +39,19 @@
         "Phantasmal-Flames"
       ],
       "tcgcollectorExpansion": "Phantasmal Flames",
-      "source": {
-        "kind": "pokecottage-guide",
-        "page": "https://pokecottage.com/phantasmal-flames-master-set-guide"
-      },
       "counts": {
         "master": 214
-      },
-      "status": "pending-xlsx-verification"
+      }
+    },
+    {
+      "id": "Scarlet & Violet 151",
+      "cardmarketSlugs": [
+        "151",
+        "Pokemon-151",
+        "Scarlet-Violet-151",
+        "Scarlet-and-Violet-151"
+      ],
+      "workbookName": "151"
     }
   ]
 }
