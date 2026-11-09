@@ -29,7 +29,7 @@ function parseWorkbook(arrayBuffer,XLSX,options={}){
       const all=row.map(clean).join(' ');
       if(/promos\s*(?:&|and)\s*variants|optional\s*promos/i.test(all)){tier='grand';continue}
       const number=clean(row[numberIndex]),name=clean(row[nameIndex]),foil=clean(row[foilIndex]),rarity=rarityIndex>=0?clean(row[rarityIndex]):'';
-      if(!number||!name||!/^\d{1,4}(?:\/\d{1,4})?$/.test(number))continue;
+      if(!number||!name||!Number.isFinite(Number(number.split('/')[0]))||Number(number.split('/')[0])<1)continue;
       const language=/Brazilian Portuguese/i.test(rarity)?'pt':'all';
       const variant=tier==='master'?({'standard':'normal','normal':'normal','holo':'holo','reverse holo':'reverse'}[foil.toLowerCase()]||foil.toLowerCase()):rarity||foil;
       if(!variant)continue;
@@ -51,5 +51,5 @@ async function fetchAndParse(XLSX){
   if(typeof bridge!=='function')throw Error('Bridge de PokéCottage no disponible: loader beta 1.4.9 requerido');
   return parseWorkbook(await bridge(),XLSX,{set:'Mega Evolution',expectedMaster:310,expectedGrand:427,url:SOURCE})
 }
-window.CMPokeCottageXLSX={source:SOURCE,parseWorkbook,fetchAndParse,version:'0.2.0'};
+window.CMPokeCottageXLSX={source:SOURCE,parseWorkbook,fetchAndParse,version:'0.2.1'};
 })();
