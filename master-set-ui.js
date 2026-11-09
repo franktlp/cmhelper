@@ -1,4 +1,4 @@
-/* Master Set Manager UI beta 0.3.8 — loaded only by feature branch loader.
+/* Master Set Manager UI beta 0.3.9 — loaded only by feature branch loader.
  * Requires CMMasterData and CMPokeCottageXLSX. No Cardmarket purchase actions.
  */
 (()=>{'use strict';
@@ -20,13 +20,19 @@ async function inspectPublicGuide(detected){
   if(!window.CMPokeCottagePublic?.parseHTML)throw Error('Lector de tablas públicas no cargado');
   const html=await window.__cmMasterFetchPublicGuide(detected.source.page);
   const match=registry.sets.find(s=>s.id===detected.set);
-  const result=window.CMPokeCottagePublic.parseHTML(html,{set:detected.set,url:detected.source.page,expectedMaster:match?.counts?.master});
+  let result;
+  try { result=window.CMPokeCottagePublic.parseHTML(html,{set:detected.set,url:detected.source.page,expectedMaster:match?.counts?.master}); }
+  catch(e) {
+    const doc=new DOMParser().parseFromString(html,'text/html');
+    const details='[lector '+(window.CMPokeCottagePublic.version||'sin versión')+', tablas '+doc.querySelectorAll('table').length+', filas '+doc.querySelectorAll('table tr').length+', scripts '+doc.querySelectorAll('script').length+', HTML '+html.length+' caracteres]';
+    throw Error(e.message+' '+details);
+  }
   await window.CMMasterData.storeVerifiedCatalog(detected.set,result.entries,{source:result.source,counts:result.counts,parsedAt:result.parsedAt});
   return result;
 }
 async function updateCatalog(){const XLSX=await loadXLSX();const result=await window.CMPokeCottageXLSX.fetchAndParse(XLSX);await window.CMMasterData.storeVerifiedCatalog('Mega Evolution',result.entries,{source:result.source,counts:result.counts,parsedAt:result.parsedAt});return result}
 function mount(){if(document.getElementById('cm-master-ui'))return;const p=el('section',{id:'cm-master-ui'});p.style='position:fixed;right:18px;bottom:70px;z-index:2147483647;width:440px;max-width:calc(100vw - 36px);max-height:78vh;overflow:auto;padding:16px;background:#fff;color:#202020;border:2px solid #333;border-radius:12px;box-shadow:0 8px 30px #0005;font:14px Arial,sans-serif';document.body.append(p);
-const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta 0.3.8'),el('button',{type:'button',onclick:()=>p.remove()},'Cerrar'));p.append(head);
+const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta 0.3.9'),el('button',{type:'button',onclick:()=>p.remove()},'Cerrar'));p.append(head);
 const context=el('div');context.style='margin:10px 0;padding:8px;background:#f1f3f5;border-radius:6px;font-size:13px';p.append(context);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
 const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');actions.append(choose,catalog);p.append(actions);
@@ -46,5 +52,5 @@ catalog.onclick=()=>action(async()=>{const detected=detectExpansion();if(!detect
 lang.onchange=()=>{state.lang=lang.value;save();render()};tier.onchange=()=>{state.tier=tier.value;save();render()};
 action(async()=>{await loadRegistry();const r=await window.CMMasterData.refreshCollection();return 'CSV: '+r.status});}
 function addButton(){if(document.getElementById('cm-master-launch'))return;const b=el('button',{id:'cm-master-launch',type:'button',onclick:mount},'Master Sets');b.style='position:fixed;right:16px;bottom:16px;z-index:2147483646;background:#252a34;color:white;padding:9px 13px;border-radius:8px;border:1px solid #666;cursor:pointer';document.body.append(b)}
-window.CMMasterUI={mount,updateCatalog,version:'0.3.8'};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addButton,{once:true});else addButton();
+window.CMMasterUI={mount,updateCatalog,version:'0.3.9'};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addButton,{once:true});else addButton();
 })();
