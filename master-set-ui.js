@@ -1,4 +1,4 @@
-/* Master Set Manager UI beta 0.7.0 — loaded only by feature branch loader.
+/* Master Set Manager UI beta 0.7.1 — loaded only by feature branch loader.
  * Requires CMMasterData and CMPokeCottageXLSX. No Cardmarket purchase actions.
  */
 (()=>{'use strict';
@@ -43,7 +43,7 @@ function supportsGrand(config){
 }
 function mount(){if(document.getElementById('cm-master-ui'))return;const p=el('section',{id:'cm-master-ui'});p.style='position:fixed;left:18px;bottom:70px;z-index:2147483647;width:440px;max-width:calc(100vw - 36px);max-height:78vh;overflow:auto;padding:16px;background:#fff;color:#202020;border:2px solid #333;border-radius:12px;box-shadow:0 8px 30px #0005;font:14px Arial,sans-serif';document.body.append(p);
 let searchController;
-const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta 0.7.0'),el('button',{type:'button',onclick:()=>{searchController?.abort();p.remove()}},'Cerrar'));p.append(head);
+const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta 0.7.1'),el('button',{type:'button',onclick:()=>{searchController?.abort();p.remove()}},'Cerrar'));p.append(head);
 const context=el('div');context.style='margin:10px 0;padding:8px;background:#f1f3f5;border-radius:6px;font-size:13px';p.append(context);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
 const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');const search=el('button',{type:'button',disabled:true},'Buscar faltantes en Cardmarket');actions.append(choose,catalog,search);p.append(actions);
@@ -114,12 +114,24 @@ search.onclick=async()=>{
     const analyze=el('button',{type:'button',disabled:!response.covered},'Análisis inteligente');
     const plan=el('div');
     market.append(analyze,plan);
+    const sellerDiagnostics=new Map();
     analyze.onclick=async()=>{
       if(searchController)return;
       analyze.disabled=true;
       plan.textContent='Calculando el mejor reparto…';
       try{
-        const {best}=await response.analyze();
+        const {best,diagnostics}=await response.analyze();
+        for(const {seller,rows} of diagnostics){
+          const report=sellerDiagnostics.get(seller);
+          if(!report)continue;
+          const counts=new Map();
+          for(const row of rows)counts.set(row.status,(counts.get(row.status)||0)+1);
+          report.summary.textContent='Análisis · '+[...counts].map(([reason,count])=>count+' '+reason.toLowerCase()).join(' · ');
+          for(const row of rows){
+            const label=report.items.get(row.key);
+            if(label)label.textContent=' — '+row.status+(row.detail?' · '+row.detail:'');
+          }
+        }
         if(!best?.coverage){plan.textContent='El análisis no encontró un lote dentro de los límites del Helper.';return}
         plan.replaceChildren(el('p',{},best.coverage+' variantes recomendadas · '+amount(best.total)+' con portes estimados'));
         const sellers=el('select');
@@ -166,10 +178,17 @@ search.onclick=async()=>{
       const details=el('details');
       details.append(el('summary',{},seller.seller+' · '+seller.items.length+' variantes · '+
         amount(seller.total-seller.shipping)+' + '+amount(seller.shipping)+' = '+amount(seller.total)));
+      const explanation=el('p',{},'Ejecuta el análisis inteligente para ver por qué se incluyó o descartó cada variante.');
+      details.append(explanation);
+      const report={summary:explanation,items:new Map()};
+      sellerDiagnostics.set(seller.seller,report);
       for(const item of seller.items){
         const line=el('div');
         line.append(el('a',{href:item.url,target:'_blank',rel:'noopener noreferrer'},
           item.number+' · '+item.name+' · '+item.variant+' · '+item.condition+' · '+amount(item.price)));
+        const reason=el('span');
+        line.append(reason);
+        report.items.set(item.key,reason);
         details.append(line);
       }
       market.append(details);
@@ -213,5 +232,5 @@ action(async()=>{
   return 'CSV: '+(await refresh).status;
 });}
 function addButton(){if(document.getElementById('cm-master-launch'))return;const b=el('button',{id:'cm-master-launch',type:'button',onclick:mount},'Master Sets');b.style='position:fixed;left:16px;bottom:16px;z-index:2147483647;background:#252a34;color:white;padding:9px 13px;border-radius:8px;border:1px solid #666;cursor:pointer';document.body.append(b)}
-window.CMMasterUI={mount,updateCatalog,version:'0.7.0'};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addButton,{once:true});else addButton();
+window.CMMasterUI={mount,updateCatalog,version:'0.7.1'};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addButton,{once:true});else addButton();
 })();

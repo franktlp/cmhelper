@@ -2038,7 +2038,50 @@
     }
     results.sort((a,b)=>b.items.length-a.items.length||a.total-b.total||a.seller.localeCompare(b.seller));
     return {results,checked,issues,stopped,
-      analyze:()=>buildSmartPlan(missing.map(w=>({...w,language})),planSellers.map(s=>({...s,offers:s.offers.filter(o=>!masterCartAttempts.has(cartKey(o))&&!staleIds.has(o.article_id))})).filter(s=>s.offers.length)),
+      analyze:async()=>{
+        const available=planSellers.map(s=>({...s,offers:s.offers.filter(o=>
+          !masterCartAttempts.has(cartKey(o))&&!staleIds.has(o.article_id))})).filter(s=>s.offers.length);
+        const analysis=available.length?await buildSmartPlan(missing.map(w=>({...w,language})),available):
+          {best:null,valued:{},valuationRows:[],cartMaxPrice:getCartMaxPrice()};
+        const {best,valued,valuationRows,cartMaxPrice}=analysis;
+        const evaluations=new Map(valuationRows.map(v=>[JSON.stringify([v.seller,v.key]),v]));
+        const diagnostics=results.map(seller=>{
+          const eligible=seller.items.filter(o=>{
+            const v=evaluations.get(JSON.stringify([o.seller,o.key]));
+            return v&&["GOOD","OK"].includes(v.verdict)&&!best?.selected?.[o.key];
+          });
+          const needsShipping=!best?.sellerUse?.[seller.seller];
+          const failsShipping=needsShipping&&eligible.length>0&&!sellerMarginalOrderAcceptable(seller,
+            eligible.map(o=>[o.key,{...o,valuation:valued[o.key]}]));
+          const rows=seller.items.map(o=>{
+            const v=evaluations.get(JSON.stringify([o.seller,o.key]));
+            const selected=best?.selected?.[o.key];
+            let status,detail="";
+            if(!/^\d+$/.test(o.article_id))status="Sin ID de artículo";
+            else if(masterCartAttempts.has(cartKey(o)))status="Ya procesada para el carrito";
+            else if(staleIds.has(o.article_id))status="Oferta desactualizada";
+            else if(!v)status="Oferta sin valorar";
+            else if(["OUTLIER","EXPENSIVE"].includes(v.verdict)){
+              status="Precio por encima del límite";
+              detail=fmt(o.price_eur)+" frente al máximo de "+fmt(v.ceiling_eur)+" (referencia "+fmt(v.market_ref_eur)+")";
+            }else if(!["GOOD","OK"].includes(v.verdict))status="Sin referencia de precio suficiente";
+            else if(selected?.seller===o.seller)status="Incluida en el plan";
+            else if(selected){
+              status="Asignada a otro vendedor";
+              detail=selected.seller+" · "+fmt(selected.price_eur);
+            }else if(cartMaxPrice!==null&&(best?.total||0)+o.price_eur+(needsShipping?seller.shipping:0)>cartMaxPrice+1e-9){
+              status="Superaría el presupuesto al ampliar el plan";
+              detail="Presupuesto total de "+fmt(cartMaxPrice);
+            }else if(failsShipping){
+              status="Los portes superan el umbral para las variantes que quedarían por cubrir";
+              detail=fmt(seller.shipping)+" de portes estimados";
+            }else status="Oferta válida sin asignar en el reparto";
+            return {key:o.key,status,detail};
+          });
+          return {seller:seller.seller,rows};
+        });
+        return {...analysis,diagnostics};
+      },
       addPack:async pack=>{
         if(masterCartBusy)throw Error("Ya se está añadiendo un lote.");
         const allowed=new Set(planSellers.flatMap(s=>s.offers));
