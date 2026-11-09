@@ -1,4 +1,4 @@
-/* Master Set Manager UI beta 0.5.0 — loaded only by feature branch loader.
+/* Master Set Manager UI beta 0.6.0 — loaded only by feature branch loader.
  * Requires CMMasterData and CMPokeCottageXLSX. No Cardmarket purchase actions.
  */
 (()=>{'use strict';
@@ -42,19 +42,28 @@ function supportsGrand(config){
   return config?.counts?.grand!=null;
 }
 function mount(){if(document.getElementById('cm-master-ui'))return;const p=el('section',{id:'cm-master-ui'});p.style='position:fixed;left:18px;bottom:70px;z-index:2147483647;width:440px;max-width:calc(100vw - 36px);max-height:78vh;overflow:auto;padding:16px;background:#fff;color:#202020;border:2px solid #333;border-radius:12px;box-shadow:0 8px 30px #0005;font:14px Arial,sans-serif';document.body.append(p);
-const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta 0.5.0'),el('button',{type:'button',onclick:()=>p.remove()},'Cerrar'));p.append(head);
+let searchController;
+const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta 0.6.0'),el('button',{type:'button',onclick:()=>{searchController?.abort();p.remove()}},'Cerrar'));p.append(head);
 const context=el('div');context.style='margin:10px 0;padding:8px;background:#f1f3f5;border-radius:6px;font-size:13px';p.append(context);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
-const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');actions.append(choose,catalog);p.append(actions);
+const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');const search=el('button',{type:'button',disabled:true},'Buscar faltantes en Cardmarket');actions.append(choose,catalog,search);p.append(actions);
 const fileInput=el('input',{type:'file',accept:'.csv,text/csv'});fileInput.style='display:none';p.append(fileInput);
-fileInput.onchange=()=>{const file=fileInput.files?.[0];if(file)action(()=>window.CMMasterData.importCollectionFile(file));fileInput.value='';};
+fileInput.onchange=()=>{const file=fileInput.files?.[0];if(file)action(async()=>{
+  const result=await window.CMMasterData.importCollectionFile(file);
+  return 'CSV importado · '+result.entries+' registros';
+});fileInput.value='';};
 const message=el('p');message.style='font-size:12px;color:#555';p.append(message);
+const market=el('section');
+market.style='max-height:240px;overflow:auto;margin-top:8px';
+p.append(market);
 const summary=el('div');summary.style='margin:10px 0;font-weight:bold';p.append(summary);
 const results=el('div');results.style='max-height:260px;overflow:auto;border-top:1px solid #ddd;padding-top:8px';p.append(results);
 const setMsg=s=>message.textContent=s;
 let renderVersion=0;
 async function render(){
   const version=++renderVersion;
+  search.disabled=true;
+  market.replaceChildren();
   const config=detectExpansion();
   context.textContent=config?'Expansión detectada en Cardmarket: '+config.id:'Abre una expansión de Singles en Cardmarket para detectar el set';
   tier.disabled=!supportsGrand(config);
@@ -66,6 +75,7 @@ async function render(){
   if(version!==renderVersion)return;
   if(result.status!=='ok'){summary.textContent='Catálogo todavía no disponible';return}
   if(!snapshot){summary.textContent='Checklist disponible · '+result.total+' variantes';results.append(el('div',{},'Importa tu CSV de TCGCollector para ver cuáles te faltan.'));return}
+  search.disabled=!result.missing.some(item=>item.tier==='master');
   summary.textContent=result.owned+' / '+result.total+' variantes · faltan '+result.missing.length;
   const info=el('div',{},'CSV: '+snapshot.filename+' · '+snapshot.entries.length+' registros');
   info.style='font-size:12px;color:#555;margin-bottom:6px';
@@ -76,7 +86,57 @@ async function render(){
     results.append(line);
   }
 }
-async function action(fn){try{setMsg('Procesando…');const response=await fn();setMsg(typeof response==='string'?response:JSON.stringify(response));await render();}catch(e){setMsg('Error: '+e.message);console.error('Master Set Manager',e)}}
+async function action(fn){try{search.disabled=true;setMsg('Procesando…');const response=await fn();setMsg(typeof response==='string'?response:JSON.stringify(response));await render();}catch(e){setMsg('Error: '+e.message);console.error('Master Set Manager',e)}}
+const amount=n=>new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(n);
+search.onclick=async()=>{
+  if(searchController){searchController.abort();return}
+  const config=detectExpansion();
+  if(!config||!window.CMHelperSearchMasterOffers){setMsg('El buscador del Helper no está disponible.');return}
+  searchController=new AbortController();
+  search.textContent='Detener búsqueda';
+  choose.disabled=catalog.disabled=lang.disabled=tier.disabled=true;
+  market.replaceChildren();
+  const status=el('p',{},'Preparando faltantes…');
+  market.append(status);
+  try{
+    const [saved,result]=await Promise.all([
+      window.CMMasterData.getCatalog(config.id),
+      window.CMMasterData.progress(config.id,state.lang,'master')
+    ]);
+    const missing=result.missing||[];
+    const response=await window.CMHelperSearchMasterOffers({
+      missing,catalog:saved.entries,language:state.lang,signal:searchController.signal,
+      onProgress:text=>status.textContent=text
+    });
+    status.textContent=(response.stopped?response.stopped+' · ':'')+
+      response.checked+'/'+missing.length+' revisadas · '+response.covered+' con oferta en presupuesto';
+    market.append(el('p',{},'Primera página de ofertas por variante. Portes estimados según el Helper. El presupuesto se aplica por vendedor.'));
+    for(const seller of response.results){
+      const details=el('details');
+      details.append(el('summary',{},seller.seller+' · '+seller.items.length+' variantes · '+
+        amount(seller.total-seller.shipping)+' + '+amount(seller.shipping)+' = '+amount(seller.total)));
+      for(const item of seller.items){
+        const line=el('div');
+        line.append(el('a',{href:item.url,target:'_blank',rel:'noopener noreferrer'},
+          item.number+' · '+item.name+' · '+item.variant+' · '+item.condition+' · '+amount(item.price)));
+        details.append(line);
+      }
+      market.append(details);
+    }
+    if(response.issues.length){
+      const details=el('details');
+      details.append(el('summary',{},response.issues.length+' sin oferta verificable'));
+      for(const item of response.issues)details.append(el('div',{},item.number+' · '+item.variant+' · '+item.reason));
+      market.append(details);
+    }
+  }catch(e){status.textContent='Error: '+e.message}
+  finally{
+    searchController=null;
+    search.textContent='Buscar faltantes en Cardmarket';
+    choose.disabled=catalog.disabled=lang.disabled=false;
+    tier.disabled=!supportsGrand(config);
+  }
+};
 choose.onclick=()=>fileInput.click();
 catalog.onclick=()=>action(async()=>{
   const config=detectExpansion();
@@ -102,5 +162,5 @@ action(async()=>{
   return 'CSV: '+(await refresh).status;
 });}
 function addButton(){if(document.getElementById('cm-master-launch'))return;const b=el('button',{id:'cm-master-launch',type:'button',onclick:mount},'Master Sets');b.style='position:fixed;left:16px;bottom:16px;z-index:2147483647;background:#252a34;color:white;padding:9px 13px;border-radius:8px;border:1px solid #666;cursor:pointer';document.body.append(b)}
-window.CMMasterUI={mount,updateCatalog,version:'0.5.0'};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addButton,{once:true});else addButton();
+window.CMMasterUI={mount,updateCatalog,version:'0.6.0'};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addButton,{once:true});else addButton();
 })();

@@ -1872,6 +1872,155 @@
     return m ? decodeURIComponent(m[1]) : (a.textContent||"").trim();
   }
 
+  // Read-only Master Sets scan. Variant offers never enter the legacy seller cache.
+  window.CMHelperSearchMasterOffers = async function ({
+    missing, catalog, language, signal, onProgress
+  }) {
+    const listPath=location.pathname.match(/^\/(?:en|es)\/Pokemon\/Products\/Singles\/[^/]+/i)?.[0];
+    if(!listPath) throw Error("Abre la expansión en Cardmarket en español o inglés.");
+    const listURL=new URL(listPath,location.origin);
+    const ranks=["MT","NM","EX","GD","LP","PL","PO"];
+    const condition=($("#cm-condition")?.value||"NM").toUpperCase();
+    const maxCondition=ranks.indexOf(condition)+1;
+    const languageId=languageIdForWant({language});
+    if(!languageId||!maxCondition) throw Error("Idioma o estado inválido.");
+    const perCard=String($("#cm-card-max-price")?.value||"").trim().replace(",",".");
+    const cardMax=perCard===""?Infinity:Number(perCard);
+    if(Number.isNaN(cardMax)||cardMax<0) throw Error("El máximo por carta no es válido.");
+    const budget=getCartMaxPrice();
+    const defaultShipping=Math.max(0,Number(($("#cm-default-ship")?.value||"0").replace(",","."))||0);
+    const saved=new Map(Object.values(loadSellers()).map(s=>[norm(s.seller),s]));
+    const countries=discoveryCountryCodes().map(code=>CARDMARKET_COUNTRY_IDS[code]);
+    const delay=Math.max(1200,Number($("#cm-page-delay")?.value)||0);
+    const expected=new Set(missing.map(w=>normalizeNum(w.number)));
+    const byNumber=new Map();
+    const offers=new Map();
+    const issues=[];
+    let checked=0, stopped="";
+    const nextLink='a[rel="next"], a[aria-label="Siguiente página"], a[aria-label="Next page"]';
+    const nextPage=(doc,url)=>new URL(doc.querySelector(nextLink)?.getAttribute("href")||"",url);
+    let firstRequest=true;
+    async function fetchDoc(url){
+      if(url.origin!==location.origin) throw Error("Enlace externo descartado.");
+      if(!firstRequest) await sleep(delay);
+      firstRequest=false;
+      signal?.throwIfAborted();
+      const res=await fetchWithBackoff(url.href,{credentials:"include",signal,redirect:"error",
+        headers:{Accept:"text/html,application/xhtml+xml"}},"Master Sets",0);
+      if(!res.ok) throw Error("Cardmarket HTTP "+res.status);
+      const html=await res.text();
+      if(/just a moment|verify you are human|captcha|checking your browser/i.test(html)) throw Error("Cardmarket ha pedido una verificación.");
+      return new DOMParser().parseFromString(html,"text/html");
+    }
+
+    function finishFromRow(row){
+      // Use article metadata. Seller comments are free text and cannot establish a finish.
+      const cells=row.querySelectorAll(".article-attributes, .article-condition, .article-extra, .article-extras");
+      const labels=[...cells].flatMap(cell=>[cell,...cell.querySelectorAll("[title],[aria-label],[data-bs-original-title],[data-original-title],[alt]")])
+        .flatMap(el=>["title","aria-label","data-bs-original-title","data-original-title","alt"].map(a=>el.getAttribute(a))).filter(Boolean);
+      const text=norm(labels.join(" "));
+      if(/master\s*ball/.test(text))return "master ball";
+      if(/poke\s*ball/.test(text))return "poké ball";
+      if(/reverse holo|holo invers[ao]|\breverse\b/.test(text))return "reverse";
+      if(/cosmos|stamped|sello|first edition/.test(text))return "other";
+      return "";
+    }
+
+    try {
+      onProgress?.("Buscando las fichas de la expansión…");
+      const visited=new Set();
+      let url=listURL;
+      while(!visited.has(url.href)&&url.pathname===listPath){
+        visited.add(url.href);
+        const doc=await fetchDoc(url);
+        for(const link of doc.querySelectorAll('a[href*="/Pokemon/Products/Singles/"]')){
+          const product=new URL(link.getAttribute("href"),url);
+          if(product.origin!==url.origin||!product.pathname.startsWith(listPath+"/"))continue;
+          // Printed number in Cardmarket's label takes precedence over the URL suffix.
+          const parsed=productCodeNumberFromHref(product.href);
+          const label=[link.textContent,link.title,link.querySelector("[title]")?.title].join(" ");
+          const printed=label.match(/\(\s*([A-Z][A-Z0-9]+)\s+(\d+)\s*\)/i);
+          if(!printed||!parsed||!expansionCodesEquivalent(parsed.expansion,printed[1]))continue;
+          const number=normalizeNum(printed[2]);
+          if(!expected.has(number))continue;
+          product.search="";product.hash="";
+          const paths=byNumber.get(number)||new Set();
+          paths.add(product.href);
+          byNumber.set(number,paths);
+        }
+        const next=nextPage(doc,url);
+        if(next.href===url.href)break;
+        url=next;
+      }
+
+      for(const want of missing){
+        signal?.throwIfAborted();
+        const number=normalizeNum(want.number);
+        const key=number+":"+want.variant;
+        const paths=byNumber.get(number);
+        onProgress?.("Buscando "+(checked+1)+"/"+missing.length+" · "+want.name+" · "+want.variant);
+        if(paths?.size!==1){
+          issues.push({...want,reason:paths?"Varias fichas coinciden":"Ficha exacta sin localizar"});
+          checked++;
+          continue;
+        }
+        const product=new URL([...paths][0]);
+        product.searchParams.set("language",languageId);
+        product.searchParams.set("minCondition",String(maxCondition));
+        if(countries.length)product.searchParams.set("sellerCountry",countries.join(","));
+        const sameCard=catalog.filter(x=>x.tier==="master"&&normalizeNum(x.number)===number);
+        const patterned=sameCard.some(x=>x.variant==="poké ball"||x.variant==="master ball");
+        const hasReverse=sameCard.some(x=>x.variant==="reverse");
+        const pattern=want.variant==="poké ball"||want.variant==="master ball";
+        const ordinary=want.variant==="normal"||want.variant==="holo";
+        const reverseFilter=want.variant==="reverse"?"Y":ordinary&&hasReverse?"N":"";
+        if(reverseFilter)product.searchParams.set("isReverseHolo",reverseFilter);
+        const doc=await fetchDoc(product);
+        const filter=doc.querySelector('select[name="isReverseHolo"], input[name="isReverseHolo"]:checked');
+        const filterConfirmed=!!reverseFilter&&filter?.value===reverseFilter;
+        let found=false;
+        for(const row of doc.querySelectorAll(".article-row")){
+          const finish=finishFromRow(row);
+          const exact=pattern?finish===want.variant:
+            want.variant==="reverse"?finish==="reverse"&&!patterned||!finish&&filterConfirmed&&!patterned:
+            ordinary&&!finish&&!patterned&&(filterConfirmed||!hasReverse&&!filter);
+          if(!exact||!languageMatchesWant(detectOfferLanguage(row),language))continue;
+          const state=row.querySelector(".article-condition .badge")?.textContent.trim();
+          if(!ranks.includes(state)||ranks.indexOf(state)+1>maxCondition)continue;
+          const seller=sellerNameFromRow(row);
+          const price=euro((row.querySelector(".price-container .fw-bold")||
+            row.querySelector(".col-offer .fw-bold")||row.querySelector(".mobile-offer-container .fw-bold"))?.textContent);
+          if(!seller||!Number.isFinite(price)||price<=0||price>cardMax)continue;
+          const sellerKey=norm(seller);
+          const items=offers.get(sellerKey)||new Map();
+          if(!items.has(key)||items.get(key).price>price)items.set(key,{...want,key,seller,price,url:product.href,condition:state});
+          offers.set(sellerKey,items);
+          found=true;
+        }
+        if(!found)issues.push({...want,reason:"Sin oferta verificable en la primera página"});
+        checked++;
+      }
+    } catch(e){
+      stopped=signal?.aborted?"Búsqueda detenida":e.message;
+    }
+
+    const results=[];
+    for(const [sellerKey,items] of offers){
+      const shipping=Math.max(0,Number(saved.get(sellerKey)?.shipping??defaultShipping)||0);
+      const selected=[];
+      let cents=Math.round(shipping*100);
+      for(const item of [...items.values()].sort((a,b)=>a.price-b.price)){
+        const price=Math.round(item.price*100);
+        if(budget!=null&&cents+price>Math.round(budget*100))break;
+        cents+=price;
+        selected.push(item);
+      }
+      if(selected.length)results.push({seller:selected[0].seller,items:selected,shipping,total:cents/100});
+    }
+    results.sort((a,b)=>b.items.length-a.items.length||a.total-b.total||a.seller.localeCompare(b.seller));
+    return {results,checked,issues,stopped,covered:new Set(results.flatMap(s=>s.items.map(o=>o.key))).size};
+  };
+
   function tokenFromDoc(doc) {
     const inp=doc?.querySelector?.('input[name="__cmtkn"]');
     if(inp?.value) return inp.value;
