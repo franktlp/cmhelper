@@ -22,7 +22,7 @@
       if(!r.ok) throw new Error(label+' HTTP '+r.status);
       return r.text();
     });
-    (0,eval)(source+`\n//# sourceURL=${name}`);
+    eval(source+`\n//# sourceURL=${name}`);
     return source;
   }
   try{
