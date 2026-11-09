@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Cardmarket Helper BETA Master Sets
 // @namespace    https://github.com/franktlp/cmhelper/beta-master-sets
-// @version      1.4.11-beta
+// @version      1.4.12-beta
 // @description  Carga automaticamente la ultima version del Cardmarket Helper desde GitHub
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
 // @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @connect      pokecottagecdn.com
+// @connect      pokecottage.com
 // @connect      raw.githubusercontent.com
 // @connect      cdn.sheetjs.com
 // @run-at       document-idle
@@ -28,6 +29,18 @@
       onload:r=>r.status>=200&&r.status<300&&r.response?resolve(r.response):reject(new Error('PokéCottage HTTP '+r.status)),
       onerror:()=>reject(new Error('No se pudo conectar con PokéCottage')),
       ontimeout:()=>reject(new Error('PokéCottage no respondió en 30 segundos'))
+    });
+  });
+  page.__cmMasterFetchPublicGuide=(raw)=>new Promise((resolve,reject)=>{
+    let url;
+    try { url=new URL(raw); } catch { reject(Error('URL de guía inválida')); return; }
+    if(url.origin!=='https://pokecottage.com'||!url.pathname.endsWith('-master-set-guide')||!url.pathname.startsWith('/')){
+      reject(Error('Solo se permiten guías públicas de PokéCottage'));return;
+    }
+    GM_xmlhttpRequest({method:'GET',url:url.href,responseType:'text',timeout:30000,
+      onload:r=>r.status>=200&&r.status<300?resolve(r.responseText):reject(Error('Guía HTTP '+r.status)),
+      onerror:()=>reject(Error('No se pudo obtener la guía pública')),
+      ontimeout:()=>reject(Error('La guía pública tardó demasiado'))
     });
   });
   const BASE='https://raw.githubusercontent.com/franktlp/cmhelper/feature/master-set-manager/';
