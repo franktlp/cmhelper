@@ -1865,6 +1865,24 @@
     return "";
   }
 
+  function extractMasterArticleId(row) {
+    const ids=new Set();
+    const add=value=>{if(/^\d+$/.test(value||""))ids.add(value)};
+    const selector='[id],[data-article-id],[data-id-article],[data-idarticle],[data-articleid],input[name],button[name],[onclick],[href],[formaction]';
+    for(const el of [row,...row.querySelectorAll(selector)]){
+      add(el.id?.match(/^(?:stockRow|articleRow|article)[-_]?(\d+)$/i)?.[1]);
+      for(const attr of ["data-article-id","data-id-article","data-idarticle","data-articleid"])add(el.getAttribute(attr));
+      const name=el.getAttribute("name")||"";
+      add(name.match(/^idArticle\[(\d+)\]$/i)?.[1]);
+      if(/^idArticle$/i.test(name))add(el.value);
+      for(const attr of ["onclick","href","formaction"]){
+        const text=el.getAttribute(attr)||"";
+        for(const m of text.matchAll(/(?:[?&]idArticle=|\bidArticle["']?\s*:\s*["']?)(\d+)\b/gi))add(m[1]);
+      }
+    }
+    return ids.size===1?[...ids][0]:"";
+  }
+
   function sellerNameFromRow(row) {
     const a=row?.querySelector('a[href*="/Users/"]');
     if(!a) return "";
@@ -1896,7 +1914,7 @@
     const delay=Math.max(1200,Number($("#cm-page-delay")?.value)||0);
     const expected=new Set(missing.map(w=>normalizeNum(w.number)));
     const byNumber=new Map();
-    const offers=new Map();
+    const offers=new Map(),cartOffers=new Map();
     const issues=[];
     const cartKey=o=>[o.set,o.language,o.key].join("|");
     let checked=0, stopped="";
@@ -1995,7 +2013,7 @@
               row.querySelector(".col-offer .fw-bold")||row.querySelector(".mobile-offer-container .fw-bold"))?.textContent);
             if(!seller||!Number.isFinite(price)||price<=0||price>cardMax)continue;
             matches.push({...want,key,seller,price,price_eur:price,url:product.href,condition:state,
-              article_id:extractArticleId(row),country:detectCountryFromElement(row),language:detectOfferLanguage(row)});
+              article_id:extractMasterArticleId(row),country:detectCountryFromElement(row),language:detectOfferLanguage(row)});
           }
           return matches;
         };
@@ -2010,6 +2028,11 @@
           const items=offers.get(sellerKey)||new Map();
           if(!items.has(key)||items.get(key).price>offer.price)items.set(key,{...offer,verify});
           offers.set(sellerKey,items);
+          if(offer.article_id){
+            const buyable=cartOffers.get(sellerKey)||new Map();
+            if(!buyable.has(key)||buyable.get(key).price>offer.price)buyable.set(key,{...offer,verify});
+            cartOffers.set(sellerKey,buyable);
+          }
           found=true;
         }
         if(!found)issues.push({...want,reason:"Sin oferta verificable en la primera página"});
@@ -2023,7 +2046,7 @@
     const staleIds=new Set();
     for(const [sellerKey,items] of offers){
       const shipping=Math.max(0,Number(saved.get(sellerKey)?.shipping??defaultShipping)||0);
-      const eligible=[...items.values()].filter(o=>/^\d+$/.test(o.article_id)&&!masterCartAttempts.has(cartKey(o)));
+      const eligible=[...(cartOffers.get(sellerKey)?.values()||[])].filter(o=>!masterCartAttempts.has(cartKey(o)));
       if(eligible.length)planSellers.push({seller:eligible[0].seller,shipping,
         country:saved.get(sellerKey)?.country||eligible.find(o=>o.country)?.country||"",offers:eligible});
       const selected=[];
@@ -2057,7 +2080,11 @@
             const v=evaluations.get(JSON.stringify([o.seller,o.key]));
             const selected=best?.selected?.[o.key];
             let status,detail="";
-            if(!/^\d+$/.test(o.article_id))status="Sin ID de artículo";
+            if(!o.article_id){
+              status="Sin ID de artículo en esta oferta";
+              if(v)detail="Oferta alternativa del mismo vendedor con ID: "+fmt(v.price_eur)+
+                (selected?.seller===o.seller?" · incluida en el plan":" · no incluida en el plan");
+            }
             else if(masterCartAttempts.has(cartKey(o)))status="Ya procesada para el carrito";
             else if(staleIds.has(o.article_id))status="Oferta desactualizada";
             else if(!v)status="Oferta sin valorar";
