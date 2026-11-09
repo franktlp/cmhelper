@@ -13,13 +13,21 @@ function mount(){if(document.getElementById('cm-master-ui'))return;const p=el('s
 const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta'),el('button',{type:'button',onclick:()=>p.remove()},'Cerrar'));p.append(head);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
 const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Elegir CSV local'),refresh=el('button',{type:'button'},'Releer CSV'),permission=el('button',{type:'button'},'Autorizar CSV'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');actions.append(choose,refresh,permission,catalog);p.append(actions);
+const fileInput=el('input',{type:'file',accept:'.csv,text/csv'});fileInput.style='display:none';p.append(fileInput);
+fileInput.onchange=()=>{const file=fileInput.files?.[0];if(file)action(()=>window.CMMasterData.importCollectionFile(file));fileInput.value='';};
 const message=el('p');message.style='font-size:12px;color:#555';p.append(message);
 const summary=el('div');summary.style='margin:10px 0;font-weight:bold';p.append(summary);
 const results=el('div');results.style='max-height:260px;overflow:auto;border-top:1px solid #ddd;padding-top:8px';p.append(results);
 const setMsg=s=>message.textContent=s;
 async function render(){const snapshot=await window.CMMasterData.getSnapshot();const result=await window.CMMasterData.progress(state.set,state.lang,state.tier);results.replaceChildren();if(result.status!=='ok'){summary.textContent='Catálogo todavía no disponible';setMsg('Pulsa Actualizar PokéCottage para descargar la checklist original.');return}summary.textContent=result.owned+' / '+result.total+' variantes · faltan '+result.missing.length;const info=el('div',{},'CSV: '+(snapshot?.filename||'no seleccionado')+' · '+(snapshot?.entries?.length||0)+' registros');info.style='font-size:12px;color:#555;margin-bottom:6px';results.append(info);for(const item of result.missing.slice(0,120)){const line=el('div',{},item.number+' · '+item.name+' · '+item.variant);line.style='padding:3px 0;border-bottom:1px solid #eee';results.append(line)}if(result.missing.length>120)results.append(el('p',{},'Mostrando las primeras 120 faltantes.'))}
 async function action(fn){try{setMsg('Procesando…');const response=await fn();setMsg(typeof response==='string'?response:JSON.stringify(response));await render();}catch(e){setMsg('Error: '+e.message);console.error('Master Set Manager',e)}}
-choose.onclick=()=>action(()=>window.CMMasterData.chooseCollectionFile());
+choose.onclick=()=>{
+  if(typeof window.showOpenFilePicker!=='function'){fileInput.click();return}
+  action(async()=>{
+    try{return await window.CMMasterData.chooseCollectionFile()}
+    catch(e){if(e?.name==='AbortError')return 'Selección cancelada';if(e?.name==='SecurityError'||e?.name==='NotAllowedError'){fileInput.click();return 'Selecciona el CSV con el diálogo estándar'}throw e}
+  });
+};
 refresh.onclick=()=>action(()=>window.CMMasterData.refreshCollection());
 permission.onclick=()=>action(()=>window.CMMasterData.requestCollectionPermission());
 catalog.onclick=()=>action(async()=>{const result=await updateCatalog();return 'Catálogo guardado: '+result.counts.master+' Master y '+result.counts.grand+' Grand';});
