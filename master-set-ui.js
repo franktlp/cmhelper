@@ -1,4 +1,4 @@
-/* Master Set Manager UI beta 0.9.0 — loaded only by feature branch loader.
+/* Master Set Manager UI beta 0.10.0 — loaded only by feature branch loader.
  * Requires CMMasterData and CMPokeCottageXLSX. No Cardmarket purchase actions.
  */
 (()=>{'use strict';
@@ -48,12 +48,18 @@ function updateCatalog(config){
 function supportsGrand(config){
   return config?.counts?.grand!=null;
 }
-function mount(){if(document.getElementById('cm-master-ui'))return;const p=el('section',{id:'cm-master-ui'});p.style='position:fixed;left:18px;bottom:70px;z-index:2147483647;width:440px;max-width:calc(100vw - 36px);max-height:78vh;overflow:auto;padding:16px;background:#fff;color:#202020;border:2px solid #333;border-radius:12px;box-shadow:0 8px 30px #0005;font:14px Arial,sans-serif';document.body.append(p);
+function mount(){if(document.getElementById('cm-master-ui'))return;const p=el('section',{id:'cm-master-ui'});p.style='padding:4px 0;color:#202020;font:14px Arial,sans-serif';
+document.getElementById('cm-master-host').append(p);
 let searchController;
 let sessionData;
 let refreshShippingView;
 const lifecycle=new AbortController();
-const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta 0.9.0'),el('button',{type:'button',onclick:()=>{searchController?.abort();lifecycle.abort();p.remove()}},'Cerrar'));p.append(head);
+const detached=new MutationObserver(()=>{
+  if(!p.isConnected){searchController?.abort();lifecycle.abort();detached.disconnect()}
+});
+detached.observe(document.body,{childList:true,subtree:true});
+const head=el('div');head.style='margin:8px 0;font-size:12px;color:#666';
+head.append(el('span',{},'Master Sets · beta 0.10.0'));p.append(head);
 const context=el('div');context.style='margin:10px 0;padding:8px;background:#f1f3f5;border-radius:6px;font-size:13px';p.append(context);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
 const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');const search=el('button',{type:'button',disabled:true},'Buscar faltantes en Cardmarket');actions.append(choose,catalog,search);p.append(actions);
@@ -64,10 +70,10 @@ fileInput.onchange=()=>{const file=fileInput.files?.[0];if(file)action(async()=>
 });fileInput.value='';};
 const message=el('p');message.style='font-size:12px;color:#555';p.append(message);
 const market=el('section');
-market.style='max-height:240px;overflow:auto;margin-top:8px';
+market.style='margin-top:8px';
 p.append(market);
 const summary=el('div');summary.style='margin:10px 0;font-weight:bold';p.append(summary);
-const results=el('div');results.style='max-height:260px;overflow:auto;border-top:1px solid #ddd;padding-top:8px';p.append(results);
+const results=el('div');results.style='border-top:1px solid #ddd;padding-top:8px';p.append(results);
 const setMsg=s=>message.textContent=s;
 let renderVersion=0;
 async function render(){
@@ -306,6 +312,73 @@ action(async()=>{
   }
   return 'CSV: '+(await refresh).status;
 });}
-function addButton(){if(document.getElementById('cm-master-launch'))return;const b=el('button',{id:'cm-master-launch',type:'button',onclick:mount},'Master Sets');b.style='position:fixed;left:16px;bottom:16px;z-index:2147483647;background:#252a34;color:white;padding:9px 13px;border-radius:8px;border:1px solid #666;cursor:pointer';document.body.append(b)}
-window.CMMasterUI={mount,updateCatalog,version:'0.9.0'};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addButton,{once:true});else addButton();
+let showMode;
+function installTabs(){
+  const body=document.getElementById('cm-window-body');
+  if(!body||document.getElementById('cm-helper-tabs'))return !!body;
+  const wants=el('section',{id:'cm-wants-panel',role:'tabpanel'});
+  while(body.firstChild)wants.append(body.firstChild);
+  const nav=el('div',{id:'cm-helper-tabs',role:'tablist'});
+  nav.style='display:flex;gap:8px;position:sticky;top:-15px;padding:10px 0;background:#fff;z-index:1;border-bottom:1px solid #ddd;margin-bottom:10px';
+  const wantsTab=el('button',{id:'cm-wants-tab',type:'button',role:'tab'},'Wants');
+  const masterTab=el('button',{id:'cm-master-tab',type:'button',role:'tab'},'Master Sets');
+  wantsTab.setAttribute('aria-controls','cm-wants-panel');
+  masterTab.setAttribute('aria-controls','cm-master-host');
+  wants.setAttribute('aria-labelledby',wantsTab.id);
+  const close=el('button',{type:'button',onclick:()=>wants.querySelector('#cm-close')?.click()},'Cerrar');
+  close.style='margin-left:auto';
+  nav.append(wantsTab,masterTab,close);
+  const shared=el('div',{id:'cm-shared-controls'});
+  shared.style='display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:8px;background:#f1f3f5;border-radius:6px;margin-bottom:10px';
+  for(const id of ['cm-condition','cm-card-max-price','cm-cart-max-price','cm-default-ship']){
+    const label=wants.querySelector('#'+id)?.closest('label');
+    if(label)shared.append(label);
+  }
+  const settings=el('details',{id:'cm-shared-options'});
+  settings.append(el('summary',{},'Países, pausas y valoración'));
+  const extras=el('div');
+  extras.style='display:flex;gap:10px;flex-wrap:wrap;padding:8px 0';
+  const pageDelay=wants.querySelector('#cm-page-delay')?.closest('label');
+  if(pageDelay)extras.append(pageDelay);
+  for(const id of ['cm-country-mode','cm-premium']){
+    const group=wants.querySelector('#'+id)?.closest('label')?.parentElement?.parentElement;
+    if(group)extras.append(group);
+  }
+  settings.append(extras);
+  const host=el('section',{id:'cm-master-host',role:'tabpanel',hidden:true});
+  host.setAttribute('aria-labelledby',masterTab.id);
+  body.append(nav,shared,settings,wants,host);
+  showMode=mode=>{
+    const master=mode==='master';
+    state.mode=master?'master':'wants';
+    save();
+    wants.hidden=master;
+    host.hidden=!master;
+    for(const [tab,active] of [[wantsTab,!master],[masterTab,master]]){
+      tab.setAttribute('aria-selected',String(active));
+      tab.tabIndex=active?0:-1;
+      tab.style='padding:7px 14px;border:1px solid #23304a;border-radius:5px;cursor:pointer;background:'+(active?'#23304a;color:#fff':'#fff;color:#23304a');
+    }
+    if(master)mount();
+  };
+  wantsTab.onclick=()=>showMode('wants');
+  masterTab.onclick=()=>showMode('master');
+  nav.onkeydown=e=>{
+    if(!['ArrowLeft','ArrowRight'].includes(e.key)||!e.target.matches('[role="tab"]'))return;
+    e.preventDefault();
+    const next=e.target===wantsTab?masterTab:wantsTab;
+    next.click();next.focus();
+  };
+  document.getElementById('cm-master-launch')?.remove();
+  showMode(state.mode||'wants');
+  return true;
+}
+function activateMaster(){if(installTabs())showMode?.('master')}
+window.CMMasterUI={mount:activateMaster,updateCatalog,version:'0.10.0'};
+if(!installTabs()){
+  const observer=new MutationObserver(()=>{
+    if(installTabs())observer.disconnect();
+  });
+  observer.observe(document.documentElement,{childList:true,subtree:true});
+}
 })();
