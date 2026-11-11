@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "1.5.4";
+  const VERSION = "1.5.5";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -788,8 +788,8 @@
   function loadShippingOverrides(){
     try{return JSON.parse(localStorage.getItem(SHIPPING_OVERRIDES_KEY)||"{}")}catch{return {}}
   }
-  function shippingFor(seller,fallback=0){
-    const value=loadShippingOverrides()[norm(seller)]?.value;
+  function shippingFor(seller,fallback=0,overrides=loadShippingOverrides()){
+    const value=overrides[norm(seller)]?.value;
     return Number.isFinite(value)&&value>=0?value:Number(fallback)||0;
   }
   function saveShippingOverrides(changes){
@@ -2164,9 +2164,10 @@
     const results=[],planSellers=[];
     const staleIds=new Set(restore?.staleIds||[]);
     function refreshShipping(){
+      const overrides=loadShippingOverrides();
       results.length=0;planSellers.length=0;
     for(const [sellerKey,items] of offers){
-      const shipping=shippingFor([...items.values()][0].seller,restore?.shipping?.[sellerKey]??saved.get(sellerKey)?.shipping??defaultShipping);
+      const shipping=shippingFor([...items.values()][0].seller,restore?.shipping?.[sellerKey]??saved.get(sellerKey)?.shipping??defaultShipping,overrides);
       const eligible=[...(cartOffers.get(sellerKey)?.values()||[])].filter(o=>!hasMasterAttempt(cartKey(o)));
       if(eligible.length)planSellers.push({seller:eligible[0].seller,shipping,
         country:saved.get(sellerKey)?.country||eligible.find(o=>o.country)?.country||"",offers:eligible});
@@ -2183,14 +2184,17 @@
     results.sort((a,b)=>b.items.length-a.items.length||a.total-b.total||a.seller.localeCompare(b.seller));
     }
     refreshShipping();
+    const currentShippingOverrides=loadShippingOverrides();
     const shippingChanged=!!restore&&[...offers].some(([key,items])=>
-      shippingFor([...items.values()][0].seller,restore.shipping?.[key]??defaultShipping)!==restore.shipping?.[key]);
+      shippingFor([...items.values()][0].seller,restore.shipping?.[key]??defaultShipping,currentShippingOverrides)!==restore.shipping?.[key]);
     return {results,checked,issues,stopped,refreshShipping,shippingChanged,
-      shippingSellers:()=>[...offers].map(([key,items])=>({
+      shippingSellers:()=>{
+        const overrides=loadShippingOverrides();
+        return [...offers].map(([key,items])=>({
         seller:[...items.values()][0].seller,country:saved.get(key)?.country||"",
-        shipping:shippingFor([...items.values()][0].seller,restore?.shipping?.[key]??saved.get(key)?.shipping??defaultShipping),
+        shipping:shippingFor([...items.values()][0].seller,restore?.shipping?.[key]??saved.get(key)?.shipping??defaultShipping,overrides),
         wantsCount:items.size,wantsValue:[...items.values()].reduce((sum,o)=>sum+o.price_eur,0)
-      })),
+      }))},
       analyze:async()=>{
         refreshShipping();
         const available=planSellers.map(s=>({...s,offers:s.offers.filter(o=>
@@ -3732,20 +3736,19 @@
     `;
 
     const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-    const rows = sellers.map(s => `
-      <tr>
-        <td style="padding:6px 8px;border-bottom:1px solid #ddd">${escape(s.seller)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:center">${escape(s.country || "??")}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:center">${escape(s.status || "COMPLETE")}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">${s.wantsCount}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">${fmt(s.wantsValue)}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">
-          <input data-seller="${escape(s.seller)}" class="cm-ship-input"
-            value="${shippingFor(s.seller,s.shipping).toFixed(2)}" data-initial="${shippingFor(s.seller,s.shipping).toFixed(2)}"
-            style="width:80px;padding:4px;text-align:right"> €
-        </td>
-      </tr>
-    `).join("");
+    // Read the shared overrides once. Parsing this growing object for every
+    // input made opening the previous editor quadratic in the seller count.
+    const overrides=loadShippingOverrides();
+    const collator=new Intl.Collator('es',{sensitivity:'base',numeric:true});
+    const compare=(a,b)=>collator.compare(String(a),String(b));
+    const dirty=new Set();
+    const records=sellers.map((seller,index)=>{
+      const saved=overrides[norm(seller.seller)]?.value;
+      const initial=Number.isFinite(saved)&&saved>=0?saved:Number(seller.shipping)||0;
+      return {seller,index,initial,raw:initial.toFixed(2),searchName:norm(seller.seller)};
+    });
+    const PAGE_SIZE=50;
+    let pageIndex=0,filtered=[];
 
     editor.innerHTML = `
       <div style="font-size:18px;font-weight:700;margin-bottom:10px">Editar portes · ${mode}</div>
@@ -3781,8 +3784,13 @@
             <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Portes €</th>
           </tr>
         </thead>
-        <tbody>${rows}</tbody>
+        <tbody></tbody>
       </table>
+      <div style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px">
+        <button id="cm-ship-prev" type="button">Anterior</button>
+        <span id="cm-ship-page"></span>
+        <button id="cm-ship-next" type="button">Siguiente</button>
+      </div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
         <button id="cm-ship-save" style="padding:8px 12px;font-weight:700">Guardar portes</button>
         <button id="cm-ship-cancel" style="padding:8px 12px">Cancelar</button>
@@ -3793,22 +3801,49 @@
     const search=editor.querySelector("#cm-ship-search"),country=editor.querySelector("#cm-ship-country");
     const order=editor.querySelector("#cm-ship-sort"),edited=editor.querySelector("#cm-ship-edited");
     const tbody=editor.querySelector("tbody");
-    const records=[...tbody.rows].map((row,index)=>({row,seller:sellers[index],input:row.querySelector(".cm-ship-input")}));
-    const text=value=>norm(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'');
-    const compare=(a,b)=>String(a).localeCompare(String(b),'es',{sensitivity:'base',numeric:true});
     const shipping=record=>{
-      const raw=record.input.value.trim().replace(',','.');
+      const raw=record.raw.trim().replace(',','.');
       const value=Number(raw);
       return raw!==''&&Number.isFinite(value)&&value>=0?value:null;
     };
-    const changed=record=>shipping(record)!==Number(record.input.dataset.initial);
     for(const value of [...new Set(sellers.map(s=>s.country||'??'))].sort(compare)){
       const option=document.createElement('option');option.value=value;option.textContent=value;country.append(option);
     }
-    function filterRows(){
-      const query=text(search.value);
-      let visible=0;
-      records.sort((a,b)=>{
+    function updateCount(){
+      editor.querySelector('#cm-ship-count').textContent=filtered.length+' de '+records.length+' vendedores · '+dirty.size+' modificados';
+    }
+    function renderRows(){
+      const pages=Math.max(1,Math.ceil(filtered.length/PAGE_SIZE));
+      pageIndex=Math.max(0,Math.min(pageIndex,pages-1));
+      const visible=filtered.slice(pageIndex*PAGE_SIZE,(pageIndex+1)*PAGE_SIZE);
+      // Only this page exists in the DOM. Drafts live in records, independently
+      // of search, sort or pagination, and are updated on every keystroke.
+      tbody.innerHTML=visible.map(record=>{
+        const s=record.seller;
+        const cell='padding:6px 8px;border-bottom:1px solid #ddd';
+        return `<tr>
+          <td style="${cell}">${escape(s.seller)}</td>
+          <td style="${cell};text-align:center">${escape(s.country||'??')}</td>
+          <td style="${cell};text-align:center">${escape(s.status||'COMPLETE')}</td>
+          <td style="${cell};text-align:right">${Number(s.wantsCount)||0}</td>
+          <td style="${cell};text-align:right">${fmt(s.wantsValue)}</td>
+          <td style="${cell};text-align:right"><input class="cm-ship-input" data-index="${record.index}"
+            data-seller="${escape(s.seller)}" value="${escape(record.raw)}" data-initial="${record.initial}"
+            aria-label="Portes de ${escape(s.seller)}" style="width:80px;padding:4px;text-align:right"> €</td>
+        </tr>`;
+      }).join('');
+      editor.querySelector('#cm-ship-empty').hidden=filtered.length!==0;
+      editor.querySelector('#cm-ship-prev').disabled=pageIndex===0;
+      editor.querySelector('#cm-ship-next').disabled=pageIndex>=pages-1;
+      editor.querySelector('#cm-ship-page').textContent='Página '+(pageIndex+1)+' de '+pages+' · hasta '+PAGE_SIZE+' vendedores por página';
+      updateCount();
+    }
+    function filterRows(reset=true){
+      if(reset)pageIndex=0;
+      const query=norm(search.value);
+      filtered=records.filter(record=>record.searchName.includes(query)&&
+        (!country.value||(record.seller.country||'??')===country.value)&&(!edited.checked||dirty.has(record)));
+      filtered.sort((a,b)=>{
         let difference=0;
         if(order.value==='coverage')difference=(Number(b.seller.wantsCount)||0)-(Number(a.seller.wantsCount)||0);
         if(order.value==='country')difference=compare(a.seller.country||'??',b.seller.country||'??');
@@ -3819,23 +3854,19 @@
         }
         return difference||compare(a.seller.seller,b.seller.seller);
       });
-      for(const record of records){
-        record.row.hidden=!(text(record.seller.seller).includes(query)&&
-          (!country.value||(record.seller.country||'??')===country.value)&&(!edited.checked||changed(record)));
-        if(!record.row.hidden)visible++;
-        // Move the existing nodes: edits survive sorting and hiding rows.
-        tbody.append(record.row);
-      }
-      editor.querySelector('#cm-ship-count').textContent=visible+' de '+records.length+' vendedores · '+records.filter(changed).length+' modificados';
-      editor.querySelector('#cm-ship-empty').hidden=visible!==0;
+      renderRows();
     }
-    search.oninput=filterRows;country.onchange=filterRows;order.onchange=filterRows;edited.onchange=filterRows;
-    for(const record of records)record.input.addEventListener('input',()=>{
-      record.input.setCustomValidity('');
-      // Keep focus while typing; apply live order/visibility after leaving the input.
-      editor.querySelector('#cm-ship-count').textContent=records.filter(r=>!r.row.hidden).length+' de '+records.length+' vendedores · '+records.filter(changed).length+' modificados';
+    search.oninput=()=>filterRows();country.onchange=()=>filterRows();order.onchange=()=>filterRows();edited.onchange=()=>filterRows();
+    tbody.addEventListener('input',event=>{
+      const input=event.target.closest('.cm-ship-input');if(!input)return;
+      const record=records[Number(input.dataset.index)];
+      record.raw=input.value;
+      if(shipping(record)!==record.initial)dirty.add(record);else dirty.delete(record);
+      input.setCustomValidity('');updateCount();
     });
-    for(const record of records)record.input.addEventListener('change',filterRows);
+    tbody.addEventListener('change',event=>{if(event.target.matches('.cm-ship-input'))filterRows(false)});
+    editor.querySelector('#cm-ship-prev').onclick=()=>{pageIndex--;renderRows()};
+    editor.querySelector('#cm-ship-next').onclick=()=>{pageIndex++;renderRows()};
     editor.querySelector('#cm-ship-clear').onclick=()=>{search.value='';country.value='';edited.checked=false;filterRows();search.focus()};
     filterRows();search.focus();
 
@@ -3843,18 +3874,21 @@
 
     editor.querySelector("#cm-ship-save").onclick = () => {
       const changes=[];
-      for(const input of editor.querySelectorAll(".cm-ship-input")){
-        const raw=input.value.trim().replace(",",".");
-        const value=Number(raw);
-        if(raw===""||!Number.isFinite(value)||value<0){
+      // The active input may not have blurred yet when Save is clicked.
+      for(const input of tbody.querySelectorAll('.cm-ship-input')){
+        const record=records[Number(input.dataset.index)];record.raw=input.value;
+        if(shipping(record)!==record.initial)dirty.add(record);else dirty.delete(record);
+      }
+      for(const record of dirty){
+        const value=shipping(record);
+        if(value===null){
           search.value='';country.value='';edited.checked=false;filterRows();
-          input.focus();
-          input.setCustomValidity("Introduce unos portes de 0 € o más.");
-          input.reportValidity();
+          pageIndex=Math.floor(filtered.indexOf(record)/PAGE_SIZE);renderRows();
+          const input=tbody.querySelector('[data-index="'+record.index+'"]');
+          input.focus();input.setCustomValidity("Introduce unos portes de 0 € o más.");input.reportValidity();
           return;
         }
-        input.setCustomValidity("");
-        if(value!==Number(input.dataset.initial))changes.push({seller:input.dataset.seller,value});
+        changes.push({seller:record.seller.seller,value});
       }
       try{
         if(changes.length)saveShippingOverrides(changes);

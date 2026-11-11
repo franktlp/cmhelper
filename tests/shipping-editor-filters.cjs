@@ -38,11 +38,34 @@ const sellers=[
  assert.equal(overrides().alvaro.value,3.5,'hidden edits must save');
  assert.equal(Object.keys(overrides()).length,1,'untouched shipping must remain unchanged');
  editor=open();assert.equal(input('Álvaro').value,'3.50');
- input('Zulu').value='-1';set('search','alvaro','input');field('save').click();
+ input('Zulu').value='-1';input('Zulu').dispatchEvent(new w.Event('input',{bubbles:true}));set('search','alvaro','input');field('save').click();
  assert.ok(w.document.querySelector('#cm-shipping-editor'));assert.equal(input('Zulu').closest('tr').hidden,false);
  assert.equal(w.document.activeElement,input('Zulu'));assert.equal(overrides().alvaro.value,3.5);
  input('Zulu').value='0';input('Zulu').dispatchEvent(new w.Event('input'));field('save').click();assert.equal(overrides().zulu.value,0);
  editor=open();input('Zulu').value='99';field('cancel').click();assert.equal(overrides().zulu.value,0);
+ // Large inventory: keep DOM work bounded and do not reparse the full
+ // shipping dictionary per seller. Search and save still span every page.
+ const large=Array.from({length:10000},(_,i)=>({seller:'Seller'+String(i).padStart(5,'0'),country:i%2?'ES':'DE',wantsCount:i,wantsValue:1,shipping:2}));
+ w.localStorage.setItem('cm_helper_shipping_overrides_v1',JSON.stringify(Object.fromEntries(large.map(s=>[s.seller.toLowerCase(),{value:2}]))));
+ const storagePrototype=Object.getPrototypeOf(w.localStorage),getItem=storagePrototype.getItem;
+ let reads=0;storagePrototype.getItem=function(key){if(key==='cm_helper_shipping_overrides_v1')reads++;return getItem.call(this,key)};
+ const started=w.performance.now();w.CMHelperEditShipping(large);editor=w.document.querySelector('#cm-shipping-editor');
+ const elapsed=w.performance.now()-started;
+ assert.equal(editor.querySelectorAll('tbody tr').length,50);
+ assert.equal(reads,1,'opening must read shipping overrides once for 10,000 sellers');
+ assert.match(field('page').textContent,/1 de 200/);
+ set('sort','name');
+ input('Seller00000').value='4,20';input('Seller00000').dispatchEvent(new w.Event('input',{bubbles:true}));
+ field('next').click();assert.equal(visible()[0],'Seller00050');
+ field('prev').click();assert.equal(input('Seller00000').value,'4,20');
+ set('search','Seller09999','input');assert.deepEqual(visible(),['Seller09999']);
+ input('Seller09999').value='0';input('Seller09999').dispatchEvent(new w.Event('input',{bubbles:true}));
+ field('clear').click();field('edited').checked=true;field('edited').dispatchEvent(new w.Event('change'));
+ assert.deepEqual(visible(),['Seller00000','Seller09999']);
+ set('search','unmatched','input');field('save').click();
+ assert.equal(overrides().seller00000.value,4.2);assert.equal(overrides().seller09999.value,0);
+ assert.equal(Object.keys(overrides()).length,10000);
+ console.log('PASS 10,000 sellers: 50 DOM rows, 200 pages, one shipping read, global search, drafts survive page changes and hidden save; opened in '+Math.round(elapsed)+' ms in jsdom.');
  console.log('PASS shipping filters: name/accent search, country, coverage/name/price order, empty state, unsaved-only, hidden edits saved, input nodes retained, invalid hidden edits revealed, zero shipping, cancel and persisted overrides.');
  }finally{w.close()}
 })().catch(e=>{console.error(e);process.exitCode=1});
