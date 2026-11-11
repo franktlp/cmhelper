@@ -1,4 +1,4 @@
-/* Master Set Manager UI beta 0.8.0 — loaded only by feature branch loader.
+/* Master Set Manager UI beta 0.9.0 — loaded only by feature branch loader.
  * Requires CMMasterData and CMPokeCottageXLSX. No Cardmarket purchase actions.
  */
 (()=>{'use strict';
@@ -51,7 +51,9 @@ function supportsGrand(config){
 function mount(){if(document.getElementById('cm-master-ui'))return;const p=el('section',{id:'cm-master-ui'});p.style='position:fixed;left:18px;bottom:70px;z-index:2147483647;width:440px;max-width:calc(100vw - 36px);max-height:78vh;overflow:auto;padding:16px;background:#fff;color:#202020;border:2px solid #333;border-radius:12px;box-shadow:0 8px 30px #0005;font:14px Arial,sans-serif';document.body.append(p);
 let searchController;
 let sessionData;
-const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta 0.8.0'),el('button',{type:'button',onclick:()=>{searchController?.abort();p.remove()}},'Cerrar'));p.append(head);
+let refreshShippingView;
+const lifecycle=new AbortController();
+const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta 0.9.0'),el('button',{type:'button',onclick:()=>{searchController?.abort();lifecycle.abort();p.remove()}},'Cerrar'));p.append(head);
 const context=el('div');context.style='margin:10px 0;padding:8px;background:#f1f3f5;border-radius:6px;font-size:13px';p.append(context);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
 const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');const search=el('button',{type:'button',disabled:true},'Buscar faltantes en Cardmarket');actions.append(choose,catalog,search);p.append(actions);
@@ -72,6 +74,7 @@ async function render(){
   const version=++renderVersion;
   search.disabled=true;
   market.replaceChildren();
+  refreshShippingView=null;
   const config=detectExpansion();
   context.textContent=config?'Expansión detectada en Cardmarket: '+config.id:'Abre una expansión de Singles en Cardmarket para detectar el set';
   tier.disabled=!supportsGrand(config);
@@ -94,6 +97,11 @@ async function render(){
       listPath:config.listPath,restore:stored.scan
     });
     if(version!==renderVersion)return;
+    if(response.shippingChanged){
+      stored.scan=response.snapshot();
+      stored.analysis=null;
+      stored.recalculate=true;
+    }
     await showResponse(response,stored.scan.missing,config,stored);
   }
 
@@ -108,6 +116,11 @@ async function render(){
   }
 }
 async function action(fn){try{search.disabled=true;setMsg('Procesando…');const response=await fn();setMsg(typeof response==='string'?response:JSON.stringify(response));await render();}catch(e){setMsg('Error: '+e.message);console.error('Master Set Manager',e)}}
+window.addEventListener('cm-helper-shipping-changed',()=>{
+  if(!searchController&&p.isConnected&&refreshShippingView){
+    refreshShippingView().catch(e=>setMsg('No se pudo recalcular con los portes: '+e.message));
+  }
+},{signal:lifecycle.signal});
 const amount=n=>new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(n);
 search.onclick=async()=>{
   if(searchController){searchController.abort();return}
@@ -151,18 +164,28 @@ async function showResponse(response,missing,config,restored){
   market.append(status);
     status.textContent=(restored?'Búsqueda guardada · '+new Date(restored.scan.createdAt||restored.savedAt).toLocaleString('es-ES')+' · ':'')+(response.stopped?response.stopped+' · ':'')+
       response.checked+'/'+missing.length+' revisadas · '+response.covered+' con oferta en presupuesto';
-    market.append(el('p',{},'Primera página de ofertas por variante. Portes estimados según el Helper. El presupuesto se aplica por vendedor.'));
+    market.append(el('p',{},'Primera página de ofertas por variante. Portes guardados por vendedor o estimados por el Helper.'));
+    const shipping=el('button',{type:'button'},'Editar portes');
+    shipping.onclick=()=>window.CMHelperEditShipping(response.shippingSellers());
     const analyze=el('button',{type:'button',disabled:!response.covered},'Análisis inteligente');
     const plan=el('div');
-    market.append(analyze,plan);
+    market.append(analyze,shipping,plan);
+    refreshShippingView=async()=>{
+      response.refreshShipping();
+      data.scan=response.snapshot();
+      data.analysis=null;
+      await persistSession(config,data);
+      await showResponse(response,missing,config,{...data,recalculate:true});
+    };
     const sellerDiagnostics=new Map();
-    let restoredAnalysis=restored?.analysis?response.restoreAnalysis(restored.analysis):null;
+    let restoredAnalysis=restored?.analysis&&!restored.recalculate?response.restoreAnalysis(restored.analysis):null;
     analyze.onclick=async()=>{
       if(searchController)return;
       analyze.disabled=true;
       plan.textContent='Calculando el mejor reparto…';
       try{
         const analysis=restoredAnalysis||await response.analyze();
+        data.recalculate=false;
         restoredAnalysis=null;
         data.analysis=analysis;
         await persistSession(config,data);
@@ -179,7 +202,7 @@ async function showResponse(response,missing,config,restored){
           }
         }
         if(!best?.coverage){plan.textContent=analysis.processedAll?'Este plan ya está procesado para el carrito.':'El análisis no encontró un lote dentro de los límites del Helper.';return}
-        plan.replaceChildren(el('p',{},best.coverage+' variantes recomendadas · '+amount(best.total)+' con portes estimados'));
+        plan.replaceChildren(el('p',{},best.coverage+' variantes recomendadas · '+amount(best.total)+' con portes'));
         const sellers=el('select');
         sellers.setAttribute('aria-label','Vendedor del plan');
         const packs=new Map();
@@ -215,7 +238,7 @@ async function showResponse(response,missing,config,restored){
           const pack=packs.get(seller);
           const total=pack.reduce((sum,o)=>sum+o.price_eur,0);
           if(!confirm('¿Añadir al carrito '+pack.length+' variantes de '+seller+' por '+amount(total)+' en cartas?'))return;
-          cart.disabled=sellers.disabled=search.disabled=analyze.disabled=true;
+          cart.disabled=sellers.disabled=search.disabled=analyze.disabled=shipping.disabled=true;
           feedback.textContent='Verificando precios y añadiendo las ofertas exactas…';
           try{
             const result=await response.addPack(pack);
@@ -227,7 +250,7 @@ async function showResponse(response,missing,config,restored){
               (result.stopped?' · '+result.stopped:'')+
               (result.skipped?' · Las omitidas ya no coincidían con la oferta revisada o estaban agotadas.':'');
           }catch(e){feedback.textContent='Error: '+e.message}
-          finally{sellers.disabled=search.disabled=analyze.disabled=false;showPack()}
+          finally{sellers.disabled=search.disabled=analyze.disabled=shipping.disabled=false;showPack()}
         };
       }catch(e){plan.textContent='Error: '+e.message}
       finally{analyze.disabled=false}
@@ -257,7 +280,7 @@ async function showResponse(response,missing,config,restored){
       for(const item of response.issues)details.append(el('div',{},item.number+' · '+item.variant+' · '+item.reason));
       market.append(details);
     }
-  if(restored?.analysis)await analyze.onclick();
+  if(restored?.analysis||restored?.recalculate)await analyze.onclick();
 }
 choose.onclick=()=>fileInput.click();
 catalog.onclick=()=>action(async()=>{
@@ -284,5 +307,5 @@ action(async()=>{
   return 'CSV: '+(await refresh).status;
 });}
 function addButton(){if(document.getElementById('cm-master-launch'))return;const b=el('button',{id:'cm-master-launch',type:'button',onclick:mount},'Master Sets');b.style='position:fixed;left:16px;bottom:16px;z-index:2147483647;background:#252a34;color:white;padding:9px 13px;border-radius:8px;border:1px solid #666;cursor:pointer';document.body.append(b)}
-window.CMMasterUI={mount,updateCatalog,version:'0.8.0'};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addButton,{once:true});else addButton();
+window.CMMasterUI={mount,updateCatalog,version:'0.9.0'};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addButton,{once:true});else addButton();
 })();

@@ -784,7 +784,37 @@
       .catch(e=>console.warn("No pude guardar vendedor en IndexedDB",record.seller,e));
   }
 
-  const loadSellers = () => sellersMemory;
+  const SHIPPING_OVERRIDES_KEY="cm_helper_shipping_overrides_v1";
+  function loadShippingOverrides(){
+    try{return JSON.parse(localStorage.getItem(SHIPPING_OVERRIDES_KEY)||"{}")}catch{return {}}
+  }
+  function shippingFor(seller,fallback=0){
+    const value=loadShippingOverrides()[norm(seller)]?.value;
+    return Number.isFinite(value)&&value>=0?value:Number(fallback)||0;
+  }
+  function saveShippingOverrides(changes){
+    const saved=loadShippingOverrides();
+    for(const {seller,value} of changes){
+      if(!Number.isFinite(value)||value<0)throw Error("Portes inválidos para "+seller);
+      saved[norm(seller)]={value,updatedAt:Date.now()};
+    }
+    localStorage.setItem(SHIPPING_OVERRIDES_KEY,JSON.stringify(saved));
+    const records=loadSellers();
+    for(const record of Object.values(records)){
+      const entry=saved[norm(record.seller)];
+      if(entry)record.shipping=entry.value;
+    }
+    saveSellers(records);
+    window.dispatchEvent(new CustomEvent("cm-helper-shipping-changed"));
+  }
+
+  const loadSellers = () => {
+    const overrides=loadShippingOverrides();
+    for(const record of Object.values(sellersMemory)){
+      if(overrides[norm(record.seller)])record.shipping=overrides[norm(record.seller)].value;
+    }
+    return sellersMemory;
+  };
 
   const saveSellers = obj => {
     sellersMemory=obj || {};
@@ -2105,8 +2135,10 @@
     if(restore)issues.push(...(restore.issues||[]));
     const results=[],planSellers=[];
     const staleIds=new Set(restore?.staleIds||[]);
+    function refreshShipping(){
+      results.length=0;planSellers.length=0;
     for(const [sellerKey,items] of offers){
-      const shipping=Math.max(0,Number(restore?.shipping?.[sellerKey]??saved.get(sellerKey)?.shipping??defaultShipping)||0);
+      const shipping=shippingFor([...items.values()][0].seller,restore?.shipping?.[sellerKey]??saved.get(sellerKey)?.shipping??defaultShipping);
       const eligible=[...(cartOffers.get(sellerKey)?.values()||[])].filter(o=>!hasMasterAttempt(cartKey(o)));
       if(eligible.length)planSellers.push({seller:eligible[0].seller,shipping,
         country:saved.get(sellerKey)?.country||eligible.find(o=>o.country)?.country||"",offers:eligible});
@@ -2121,8 +2153,18 @@
       if(selected.length)results.push({seller:selected[0].seller,items:selected,shipping,total:cents/100});
     }
     results.sort((a,b)=>b.items.length-a.items.length||a.total-b.total||a.seller.localeCompare(b.seller));
-    return {results,checked,issues,stopped,
+    }
+    refreshShipping();
+    const shippingChanged=!!restore&&[...offers].some(([key,items])=>
+      shippingFor([...items.values()][0].seller,restore.shipping?.[key]??defaultShipping)!==restore.shipping?.[key]);
+    return {results,checked,issues,stopped,refreshShipping,shippingChanged,
+      shippingSellers:()=>[...offers].map(([key,items])=>({
+        seller:[...items.values()][0].seller,country:saved.get(key)?.country||"",
+        shipping:shippingFor([...items.values()][0].seller,restore?.shipping?.[key]??saved.get(key)?.shipping??defaultShipping),
+        wantsCount:items.size,wantsValue:[...items.values()].reduce((sum,o)=>sum+o.price_eur,0)
+      })),
       analyze:async()=>{
+        refreshShipping();
         const available=planSellers.map(s=>({...s,offers:s.offers.filter(o=>
           !hasMasterAttempt(cartKey(o))&&!staleIds.has(o.article_id))})).filter(s=>s.offers.length);
         const analysis=available.length?await buildSmartPlan(missing.map(w=>({...w,language,key:masterNumber(w.number)+":"+w.variant})),available):
@@ -2193,7 +2235,7 @@
         issues,stopped,checked,staleIds:[...staleIds]
       }),
       addPack:pack=>navigator.locks?navigator.locks.request("cm-master-cart",()=>addPack(pack)):addPack(pack),
-      covered:new Set(results.flatMap(s=>s.items.map(o=>o.key))).size};
+      get covered(){return new Set(results.flatMap(s=>s.items.map(o=>o.key))).size}};
     async function addPack(pack){
         if(masterCartBusy)throw Error("Ya se está añadiendo un lote.");
         const allowed=new Set(planSellers.flatMap(s=>s.offers));
@@ -2387,7 +2429,7 @@
         scanned_at:new Date().toISOString(),
         expansion:"MULTI",
         scan_mode:"MULTI_SET",
-        shipping:Number(previous.shipping ?? defaultShipping),
+        shipping:shippingFor(seller,previous.shipping ?? defaultShipping),
         wants_count:wants.length,
         offers:merged,
         total_raw_offers:raw,
@@ -3645,6 +3687,10 @@
       return;
     }
 
+    openShippingEditor(sellers,"Wants");
+  };
+  function openShippingEditor(sellers,mode="Master Sets"){
+    if(!sellers.length)throw Error("No hay vendedores que mostrar.");
     const existing = document.getElementById("cm-shipping-editor");
     if (existing) existing.remove();
 
@@ -3666,17 +3712,17 @@
         <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">${fmt(s.wantsValue)}</td>
         <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">
           <input data-seller="${s.seller.replace(/"/g,'&quot;')}" class="cm-ship-input"
-            value="${Number(s.shipping||0).toFixed(2)}"
+            value="${shippingFor(s.seller,s.shipping).toFixed(2)}" data-initial="${shippingFor(s.seller,s.shipping).toFixed(2)}"
             style="width:80px;padding:4px;text-align:right"> €
         </td>
       </tr>
     `).join("");
 
     editor.innerHTML = `
-      <div style="font-size:18px;font-weight:700;margin-bottom:10px">Editar portes · wants actual</div>
+      <div style="font-size:18px;font-weight:700;margin-bottom:10px">Editar portes · ${mode}</div>
       <div style="font-size:12px;color:#666;margin-bottom:10px">
-        Wants cargado: ${wants.length} cartas · mostrando ${sellers.length} vendedores con al menos 1 coincidencia compatible.
-        Cambiar portes NO vuelve a analizar Cardmarket; solo actualiza el coste guardado.
+        ${sellers.length} vendedores · Los importes modificados se comparten entre Wants y Master Sets.
+        Guardar recalcula el plan de Master Sets con las ofertas ya encontradas.
       </div>
       <table style="width:100%;border-collapse:collapse">
         <thead>
@@ -3684,8 +3730,8 @@
             <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #333">Vendedor</th>
             <th style="text-align:center;padding:6px 8px;border-bottom:2px solid #333">País</th>
             <th style="text-align:center;padding:6px 8px;border-bottom:2px solid #333">Estado</th>
-            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Cartas wants</th>
-            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Valor wants</th>
+            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Cartas / variantes</th>
+            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Valor de cartas</th>
             <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Portes €</th>
           </tr>
         </thead>
@@ -3701,29 +3747,27 @@
     editor.querySelector("#cm-ship-cancel").onclick = () => editor.remove();
 
     editor.querySelector("#cm-ship-save").onclick = () => {
-      const updated = loadSellers();
-      let changed = 0;
-
-      editor.querySelectorAll(".cm-ship-input").forEach(inp => {
-        const seller = inp.dataset.seller;
-        let val = parseFloat(String(inp.value).replace(",", "."));
-        if (!Number.isFinite(val) || val < 0) val = 0;
-
-        if (updated[seller]) {
-          if (Number(updated[seller].shipping || 0) !== val) changed++;
-          updated[seller].shipping = val;
+      const changes=[];
+      for(const input of editor.querySelectorAll(".cm-ship-input")){
+        const raw=input.value.trim().replace(",",".");
+        const value=Number(raw);
+        if(raw===""||!Number.isFinite(value)||value<0){
+          input.setCustomValidity("Introduce unos portes de 0 € o más.");
+          input.reportValidity();
+          return;
         }
-      });
-
-      saveSellers(updated);
-      editor.remove();
-
-      // v5.4.18: refresh visible cart/plan shipping data immediately.
-      try { refreshCartPackUi(); } catch(e) {}
-
-      log.textContent = `Portes actualizados. Vendedores modificados: ${changed}\n\nPulsa "Plan inteligente" para recalcular el plan con los nuevos portes.`;
+        input.setCustomValidity("");
+        if(value!==Number(input.dataset.initial))changes.push({seller:input.dataset.seller,value});
+      }
+      try{
+        if(changes.length)saveShippingOverrides(changes);
+        editor.remove();
+        try{refreshCartPackUi()}catch{}
+        $("#cm-log").textContent="Portes guardados. Puedes recalcular el plan con estos importes.";
+      }catch(e){$("#cm-log").textContent="No se pudieron guardar los portes: "+e.message}
     };
-  };
+  }
+  window.CMHelperEditShipping=sellers=>openShippingEditor(sellers);
 
 
   let lastSmartPlan = null;
