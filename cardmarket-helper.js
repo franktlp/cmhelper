@@ -1891,36 +1891,51 @@
   }
 
   // Read-only Master Sets scan. Variant offers never enter the legacy seller cache.
-  const masterCartAttempts=new Set();
+  const MASTER_ATTEMPTS='cm_master_cart_attempts_v1';
+  const ATTEMPT_TTL=24*60*60*1000;
+  function readMasterAttempts(){
+    const saved=JSON.parse(localStorage.getItem(MASTER_ATTEMPTS)||"{}");
+    return Object.fromEntries(Object.entries(saved).filter(([,time])=>Number.isFinite(time)&&Date.now()-time<ATTEMPT_TTL));
+  }
+  function hasMasterAttempt(key){return Object.hasOwn(readMasterAttempts(),key)}
+  function markMasterAttempt(key){
+    localStorage.setItem(MASTER_ATTEMPTS,JSON.stringify({...readMasterAttempts(),[key]:Date.now()}));
+  }
+  function clearMasterAttempt(key){
+    const saved=readMasterAttempts();delete saved[key];
+    localStorage.setItem(MASTER_ATTEMPTS,JSON.stringify(saved));
+  }
   let masterCartBusy=false;
   window.CMHelperSearchMasterOffers = async function ({
-    missing, catalog, language, signal, onProgress
+    missing, catalog, language, signal, onProgress, restore, listPath:storedPath
   }) {
-    const listPath=location.pathname.match(/^\/(?:en|es)\/Pokemon\/Products\/Singles\/[^/]+/i)?.[0];
+    const listPath=storedPath||location.pathname.match(/^\/(?:en|es)\/Pokemon\/Products\/Singles\/[^/]+/i)?.[0];
     if(!listPath) throw Error("Abre la expansión en Cardmarket en español o inglés.");
     const listURL=new URL(listPath,location.origin);
+    if(listURL.origin!==location.origin||!/^\/(?:en|es)\/Pokemon\/Products\/Singles\/[^/]+$/i.test(listURL.pathname))throw Error("Expansión guardada inválida.");
     const ranks=["MT","NM","EX","GD","LP","PL","PO"];
-    const condition=($("#cm-condition")?.value||"NM").toUpperCase();
+    const condition=(restore?.settings?.condition||$("#cm-condition")?.value||"NM").toUpperCase();
     const maxCondition=ranks.indexOf(condition)+1;
     const languageId=languageIdForWant({language});
     if(!languageId||!maxCondition) throw Error("Idioma o estado inválido.");
     const perCard=String($("#cm-card-max-price")?.value||"").trim().replace(",",".");
-    const cardMax=perCard===""?Infinity:Number(perCard);
+    const cardMax=restore?.settings?(restore.settings.cardMax??Infinity):perCard===""?Infinity:Number(perCard);
     if(Number.isNaN(cardMax)||cardMax<0) throw Error("El máximo por carta no es válido.");
     const budget=getCartMaxPrice();
     const defaultShipping=Math.max(0,Number(($("#cm-default-ship")?.value||"0").replace(",","."))||0);
     const saved=new Map(Object.values(loadSellers()).map(s=>[norm(s.seller),s]));
-    const countries=discoveryCountryCodes().map(code=>CARDMARKET_COUNTRY_IDS[code]);
+    const countries=restore?.settings?.countries||discoveryCountryCodes().map(code=>CARDMARKET_COUNTRY_IDS[code]);
     const delay=Math.max(1200,Number($("#cm-page-delay")?.value)||0);
     const mainNumber=catalog.find(x=>x.tier==="master"&&/^\d+\/\d+$/.test(x.number))?.number;
     const denominator=Number(mainNumber?.split("/")[1])||null;
     const masterNumber=value=>window.CMMasterData.numberKey(value,denominator);
     const expected=new Set(missing.map(w=>masterNumber(w.number)));
-    const byNumber=new Map();
+    const byNumber=new Map(restore?.byNumber?.map(([n,paths])=>[n,new Set(paths)])||[]);
     const offers=new Map(),cartOffers=new Map();
     const issues=[];
     const cartKey=o=>[o.set,o.language,o.key].join("|");
-    let checked=0, stopped="";
+    let checked=0, stopped=restore?.stopped||"";
+    const createdAt=restore?.createdAt||Date.now();
     const nextLink='a[rel="next"], a[aria-label="Siguiente página"], a[aria-label="Next page"]';
     const nextPage=(doc,url)=>new URL(doc.querySelector(nextLink)?.getAttribute("href")||"",url);
     let firstRequest=true;
@@ -1977,7 +1992,7 @@
       onProgress?.("Buscando las fichas de la expansión…");
       const visited=new Set();
       let url=listURL;
-      while(!visited.has(url.href)&&url.pathname===listPath){
+      while(!restore&&!visited.has(url.href)&&url.pathname===listPath){
         visited.add(url.href);
         const doc=await fetchDoc(url);
         for(const link of doc.querySelectorAll('a[href*="/Pokemon/Products/Singles/"]')){
@@ -2067,7 +2082,8 @@
             o.price_eur===offer.price_eur&&o.condition===offer.condition);
         };
         let found=false;
-        for(const offer of await readOffers()){
+        const restoredOffers=restore?.offers?.filter(o=>o.key===key)||[];
+        for(const offer of restore?restoredOffers:await readOffers()){
           const sellerKey=norm(offer.seller);
           const items=offers.get(sellerKey)||new Map();
           if(!items.has(key)||items.get(key).price>offer.price)items.set(key,{...offer,verify});
@@ -2079,18 +2095,19 @@
           }
           found=true;
         }
-        if(!found)issues.push({...want,reason:noOfferReason});
+        if(!restore&&!found)issues.push({...want,reason:noOfferReason});
         checked++;
       }
     } catch(e){
       stopped=signal?.aborted?"Búsqueda detenida":e.message;
     }
 
+    if(restore)issues.push(...(restore.issues||[]));
     const results=[],planSellers=[];
-    const staleIds=new Set();
+    const staleIds=new Set(restore?.staleIds||[]);
     for(const [sellerKey,items] of offers){
-      const shipping=Math.max(0,Number(saved.get(sellerKey)?.shipping??defaultShipping)||0);
-      const eligible=[...(cartOffers.get(sellerKey)?.values()||[])].filter(o=>!masterCartAttempts.has(cartKey(o)));
+      const shipping=Math.max(0,Number(restore?.shipping?.[sellerKey]??saved.get(sellerKey)?.shipping??defaultShipping)||0);
+      const eligible=[...(cartOffers.get(sellerKey)?.values()||[])].filter(o=>!hasMasterAttempt(cartKey(o)));
       if(eligible.length)planSellers.push({seller:eligible[0].seller,shipping,
         country:saved.get(sellerKey)?.country||eligible.find(o=>o.country)?.country||"",offers:eligible});
       const selected=[];
@@ -2107,7 +2124,7 @@
     return {results,checked,issues,stopped,
       analyze:async()=>{
         const available=planSellers.map(s=>({...s,offers:s.offers.filter(o=>
-          !masterCartAttempts.has(cartKey(o))&&!staleIds.has(o.article_id))})).filter(s=>s.offers.length);
+          !hasMasterAttempt(cartKey(o))&&!staleIds.has(o.article_id))})).filter(s=>s.offers.length);
         const analysis=available.length?await buildSmartPlan(missing.map(w=>({...w,language,key:masterNumber(w.number)+":"+w.variant})),available):
           {best:null,valued:{},valuationRows:[],cartMaxPrice:getCartMaxPrice()};
         const {best,valuationRows,cartMaxPrice}=analysis;
@@ -2123,7 +2140,7 @@
               if(v)detail="Oferta alternativa del mismo vendedor con ID: "+fmt(v.price_eur)+
                 (selected?.seller===o.seller?" · incluida en el plan":" · no incluida en el plan");
             }
-            else if(masterCartAttempts.has(cartKey(o)))status="Ya procesada para el carrito";
+            else if(hasMasterAttempt(cartKey(o)))status="Ya procesada para el carrito";
             else if(staleIds.has(o.article_id))status="Oferta desactualizada";
             else if(!v)status="Oferta sin valorar";
             else if(["OUTLIER","EXPENSIVE"].includes(v.verdict)){
@@ -2144,14 +2161,47 @@
         });
         return {...analysis,diagnostics};
       },
-      addPack:async pack=>{
+      restoreAnalysis:saved=>{
+        if(!saved)return null;
+        const selected={};
+        for(const [key,offer] of Object.entries(saved.best?.selected||{})){
+          const original=planSellers.find(s=>s.seller===offer.seller)?.offers.find(o=>
+            o.key===key&&o.article_id===offer.article_id&&o.price_eur===offer.price_eur);
+          if(original&&!hasMasterAttempt(cartKey(original)))selected[key]={...offer,original};
+        }
+        const sellerUse={};
+        for(const offer of Object.values(selected)){
+          const totals=sellerUse[offer.seller]||={count:0,cost:0};
+          totals.count++;totals.cost+=offer.price_eur;
+        }
+        const cardCost=Object.values(sellerUse).reduce((sum,o)=>sum+o.cost,0);
+        const shipCost=planSellers.filter(s=>sellerUse[s.seller]).reduce((sum,s)=>sum+s.shipping,0);
+        const diagnostics=saved.diagnostics?.map(seller=>({...seller,rows:seller.rows.map(row=>{
+          const original=planSellers.find(s=>s.seller===seller.seller)?.offers.find(o=>o.key===row.key);
+          return original&&hasMasterAttempt(cartKey(original))?{...row,status:"Ya procesada para el carrito",detail:""}:row;
+        })}))||[];
+        return {...saved,diagnostics,processedAll:!!saved.best?.coverage&&!Object.keys(selected).length,best:Object.keys(selected).length?
+          {...saved.best,coverage:Object.keys(selected).length,selected,sellerUse,chosen:Object.keys(sellerUse),
+            cardCost,shipCost,total:cardCost+shipCost}:null};
+      },
+      snapshot:()=>({
+        createdAt,listPath,missing,catalog,language,
+        settings:{condition,cardMax:Number.isFinite(cardMax)?cardMax:null,countries},
+        shipping:Object.fromEntries(results.map(s=>[norm(s.seller),s.shipping])),
+        byNumber:[...byNumber].map(([n,paths])=>[n,[...paths]]),
+        offers:[...offers.values(),...cartOffers.values()].flatMap(items=>[...items.values()]).map(({verify,...o})=>o),
+        issues,stopped,checked,staleIds:[...staleIds]
+      }),
+      addPack:pack=>navigator.locks?navigator.locks.request("cm-master-cart",()=>addPack(pack)):addPack(pack),
+      covered:new Set(results.flatMap(s=>s.items.map(o=>o.key))).size};
+    async function addPack(pack){
         if(masterCartBusy)throw Error("Ya se está añadiendo un lote.");
         const allowed=new Set(planSellers.flatMap(s=>s.offers));
         const packKeys=new Set();
         const pending=pack.map(o=>o.original).filter(o=>{
           if(!allowed.has(o))return false;
           const key=cartKey(o);
-          if(masterCartAttempts.has(key)||packKeys.has(key)||staleIds.has(o.article_id))return false;
+          if(hasMasterAttempt(key)||packKeys.has(key)||staleIds.has(o.article_id))return false;
           packKeys.add(key);
           return true;
         });
@@ -2162,12 +2212,12 @@
           const token=await getCurrentCartToken(pending[0].url);
           for(const o of pending){
             if(!await o.verify(o)){staleIds.add(o.article_id);skipped++;continue}
-            masterCartAttempts.add(cartKey(o));
+            markMasterAttempt(cartKey(o));
             try{
               await addArticleToCart(o.article_id,token,1,o.url);
               added++;
             }catch(e){
-              if(e.cartType==="unavailable"){masterCartAttempts.delete(cartKey(o));staleIds.add(o.article_id);skipped++;continue}
+              if(e.cartType==="unavailable"){clearMasterAttempt(cartKey(o));staleIds.add(o.article_id);skipped++;continue}
               throw e;
             }
             await sleep(1400);
@@ -2175,8 +2225,7 @@
         }catch(e){stopped=e.message}
         finally{masterCartBusy=false}
         return {added,skipped,stopped};
-      },
-      covered:new Set(results.flatMap(s=>s.items.map(o=>o.key))).size};
+    }
   };
 
   function tokenFromDoc(doc) {

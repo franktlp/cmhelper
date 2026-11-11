@@ -1,4 +1,4 @@
-/* Master Set Manager UI beta 0.7.1 — loaded only by feature branch loader.
+/* Master Set Manager UI beta 0.8.0 — loaded only by feature branch loader.
  * Requires CMMasterData and CMPokeCottageXLSX. No Cardmarket purchase actions.
  */
 (()=>{'use strict';
@@ -8,17 +8,24 @@ state.lang ||= 'es';state.tier ||= 'master';
 const registry=window.__cmMasterRegistry;
 const imports=new Map();
 function detectExpansion(){
-  const raw=location.pathname.match(/\/Pokemon\/Products\/Singles\/([^/]+)/i)?.[1];
+  const path=location.pathname.includes('/Pokemon/Products/Singles/')?location.pathname:state.lastPath||'';
+  const raw=path.match(/\/Pokemon\/Products\/Singles\/([^/]+)/i)?.[1];
   if(!raw)return null;
+  const listPath=path.match(/^\/(?:en|es)\/Pokemon\/Products\/Singles\/[^/]+/i)?.[0];
+  if(!listPath)return null;
+  if(location.pathname.includes('/Pokemon/Products/Singles/')){
+    state.lastPath=listPath;
+    localStorage.setItem(SETTINGS,JSON.stringify(state));
+  }
   let slug;
   try{slug=decodeURIComponent(raw)}catch{return null}
   const key=window.CMMasterData.setKey;
   const registered=registry.sets.find(s=>s.cardmarketSlugs.some(x=>key(x)===key(slug)));
-  if(registered?.source)return registered;
+  if(registered?.source)return {...registered,listPath};
   const workbookName=(registered?.workbookName||slug).replace(/-/g,' ');
   const token=workbookName.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]+/g,'-').replace(/^-|-$/g,'');
   if(!token||token.length>100)return null;
-  return {...registered,id:registered?.id||slug.replace(/-/g,' '),workbookName,
+  return {...registered,listPath,id:registered?.id||slug.replace(/-/g,' '),workbookName,
     source:{url:'https://pokecottagecdn.com/mastersets/downloads/PokeCottage-'+token+'-Master-Set-Checklist.xlsx'}};
 }
 
@@ -43,7 +50,8 @@ function supportsGrand(config){
 }
 function mount(){if(document.getElementById('cm-master-ui'))return;const p=el('section',{id:'cm-master-ui'});p.style='position:fixed;left:18px;bottom:70px;z-index:2147483647;width:440px;max-width:calc(100vw - 36px);max-height:78vh;overflow:auto;padding:16px;background:#fff;color:#202020;border:2px solid #333;border-radius:12px;box-shadow:0 8px 30px #0005;font:14px Arial,sans-serif';document.body.append(p);
 let searchController;
-const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta 0.7.1'),el('button',{type:'button',onclick:()=>{searchController?.abort();p.remove()}},'Cerrar'));p.append(head);
+let sessionData;
+const head=el('div');head.style='display:flex;justify-content:space-between;align-items:center';head.append(el('strong',{},'Master Sets · beta 0.8.0'),el('button',{type:'button',onclick:()=>{searchController?.abort();p.remove()}},'Cerrar'));p.append(head);
 const context=el('div');context.style='margin:10px 0;padding:8px;background:#f1f3f5;border-radius:6px;font-size:13px';p.append(context);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
 const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');const search=el('button',{type:'button',disabled:true},'Buscar faltantes en Cardmarket');actions.append(choose,catalog,search);p.append(actions);
@@ -76,6 +84,19 @@ async function render(){
   if(result.status!=='ok'){summary.textContent='Catálogo todavía no disponible';return}
   if(!snapshot){summary.textContent='Checklist disponible · '+result.total+' variantes';results.append(el('div',{},'Importa tu CSV de TCGCollector para ver cuáles te faltan.'));return}
   search.disabled=!result.missing.some(item=>item.tier==='master');
+  const stored=await window.CMMasterData.getSearch(config.id,state.lang);
+  const savedCatalog=await window.CMMasterData.getCatalog(config.id);
+  if(version!==renderVersion)return;
+  if(stored&&stored.inventoryUpdatedAt===snapshot.updatedAt&&stored.catalogUpdatedAt===savedCatalog.updatedAt){
+    sessionData=stored;
+    const response=await window.CMHelperSearchMasterOffers({
+      missing:stored.scan.missing,catalog:stored.scan.catalog,language:state.lang,
+      listPath:config.listPath,restore:stored.scan
+    });
+    if(version!==renderVersion)return;
+    await showResponse(response,stored.scan.missing,config,stored);
+  }
+
   summary.textContent=result.owned+' / '+result.total+' variantes · faltan '+result.missing.length;
   const info=el('div',{},'CSV: '+snapshot.filename+' · '+snapshot.entries.length+' registros');
   info.style='font-size:12px;color:#555;margin-bottom:6px';
@@ -105,22 +126,47 @@ search.onclick=async()=>{
     ]);
     const missing=result.missing||[];
     const response=await window.CMHelperSearchMasterOffers({
-      missing,catalog:saved.entries,language:state.lang,signal:searchController.signal,
+      listPath:config.listPath,missing,catalog:saved.entries,language:state.lang,signal:searchController.signal,
       onProgress:text=>status.textContent=text
     });
-    status.textContent=(response.stopped?response.stopped+' · ':'')+
+    sessionData={scan:response.snapshot(),inventoryUpdatedAt:result.inventoryUpdatedAt,catalogUpdatedAt:saved.updatedAt};
+    await persistSession(config);
+    await showResponse(response,missing,config);
+  }catch(e){status.textContent='Error: '+e.message}
+  finally{
+    searchController=null;
+    search.textContent='Buscar faltantes en Cardmarket';
+    choose.disabled=catalog.disabled=lang.disabled=false;
+    tier.disabled=!supportsGrand(config);
+  }
+};
+async function persistSession(config,data=sessionData){
+  await window.CMMasterData.saveSearch(config.id,data.scan.language,
+    JSON.parse(JSON.stringify(data,(key,value)=>key==='original'||typeof value==='function'?undefined:value)));
+}
+async function showResponse(response,missing,config,restored){
+  const data=restored||sessionData;
+  market.replaceChildren();
+  const status=el('p');
+  market.append(status);
+    status.textContent=(restored?'Búsqueda guardada · '+new Date(restored.scan.createdAt||restored.savedAt).toLocaleString('es-ES')+' · ':'')+(response.stopped?response.stopped+' · ':'')+
       response.checked+'/'+missing.length+' revisadas · '+response.covered+' con oferta en presupuesto';
     market.append(el('p',{},'Primera página de ofertas por variante. Portes estimados según el Helper. El presupuesto se aplica por vendedor.'));
     const analyze=el('button',{type:'button',disabled:!response.covered},'Análisis inteligente');
     const plan=el('div');
     market.append(analyze,plan);
     const sellerDiagnostics=new Map();
+    let restoredAnalysis=restored?.analysis?response.restoreAnalysis(restored.analysis):null;
     analyze.onclick=async()=>{
       if(searchController)return;
       analyze.disabled=true;
       plan.textContent='Calculando el mejor reparto…';
       try{
-        const {best,diagnostics}=await response.analyze();
+        const analysis=restoredAnalysis||await response.analyze();
+        restoredAnalysis=null;
+        data.analysis=analysis;
+        await persistSession(config,data);
+        const {best,diagnostics}=analysis;
         for(const {seller,rows} of diagnostics){
           const report=sellerDiagnostics.get(seller);
           if(!report)continue;
@@ -132,7 +178,7 @@ search.onclick=async()=>{
             if(label)label.textContent=' — '+row.status+(row.detail?' · '+row.detail:'');
           }
         }
-        if(!best?.coverage){plan.textContent='El análisis no encontró un lote dentro de los límites del Helper.';return}
+        if(!best?.coverage){plan.textContent=analysis.processedAll?'Este plan ya está procesado para el carrito.':'El análisis no encontró un lote dentro de los límites del Helper.';return}
         plan.replaceChildren(el('p',{},best.coverage+' variantes recomendadas · '+amount(best.total)+' con portes estimados'));
         const sellers=el('select');
         sellers.setAttribute('aria-label','Vendedor del plan');
@@ -152,9 +198,18 @@ search.onclick=async()=>{
           preview.replaceChildren(el('summary',{},'Ver cartas del vendedor'));
           for(const o of pack)preview.append(el('div',{},o.number+' · '+o.name+' · '+o.variant+' · '+amount(o.price_eur)));
         };
-        sellers.onchange=showPack;
+        sellers.onchange=()=>{
+          showPack();
+          data.selectedSeller=sellers.value;
+          persistSession(config,data).catch(e=>setMsg('No se pudo guardar el vendedor: '+e.message));
+        };
         plan.append(sellers,cart,preview,feedback);
+        if(restored?.selectedSeller&&packs.has(restored.selectedSeller))sellers.value=restored.selectedSeller;
         showPack();
+        if(restored?.feedback){
+          const previous=restored.feedback;
+          feedback.textContent='Último lote · '+previous.seller+' · '+previous.added+' añadidas · '+previous.skipped+' omitidas'+(previous.stopped?' · '+previous.stopped:'');
+        }
         cart.onclick=async()=>{
           const seller=sellers.value;
           const pack=packs.get(seller);
@@ -164,7 +219,10 @@ search.onclick=async()=>{
           feedback.textContent='Verificando precios y añadiendo las ofertas exactas…';
           try{
             const result=await response.addPack(pack);
-            processed.add(seller);
+            if(!result.stopped)processed.add(seller);
+            data.scan=response.snapshot();
+            data.feedback={seller,...result};
+            await persistSession(config,data);
             feedback.textContent=result.added+' añadidas · '+result.skipped+' omitidas'+
               (result.stopped?' · '+result.stopped:'')+
               (result.skipped?' · Las omitidas ya no coincidían con la oferta revisada o estaban agotadas.':'');
@@ -199,14 +257,8 @@ search.onclick=async()=>{
       for(const item of response.issues)details.append(el('div',{},item.number+' · '+item.variant+' · '+item.reason));
       market.append(details);
     }
-  }catch(e){status.textContent='Error: '+e.message}
-  finally{
-    searchController=null;
-    search.textContent='Buscar faltantes en Cardmarket';
-    choose.disabled=catalog.disabled=lang.disabled=false;
-    tier.disabled=!supportsGrand(config);
-  }
-};
+  if(restored?.analysis)await analyze.onclick();
+}
 choose.onclick=()=>fileInput.click();
 catalog.onclick=()=>action(async()=>{
   const config=detectExpansion();
@@ -232,5 +284,5 @@ action(async()=>{
   return 'CSV: '+(await refresh).status;
 });}
 function addButton(){if(document.getElementById('cm-master-launch'))return;const b=el('button',{id:'cm-master-launch',type:'button',onclick:mount},'Master Sets');b.style='position:fixed;left:16px;bottom:16px;z-index:2147483647;background:#252a34;color:white;padding:9px 13px;border-radius:8px;border:1px solid #666;cursor:pointer';document.body.append(b)}
-window.CMMasterUI={mount,updateCatalog,version:'0.7.1'};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addButton,{once:true});else addButton();
+window.CMMasterUI={mount,updateCatalog,version:'0.8.0'};if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',addButton,{once:true});else addButton();
 })();

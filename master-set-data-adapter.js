@@ -48,6 +48,16 @@ async function progress(set,language,tier){
   const rows=variants.map(x=>({...x,owned:x.tier==='grand'?false:owned.has(key(x)),matchStatus:x.tier==='grand'?'unverified-promo-mapping':'matched-by-number-and-foil'}));
   return {status:'ok',set,language,tier,total:rows.length,owned:rows.filter(x=>x.owned).length,unverified:rows.filter(x=>x.matchStatus==='unverified-promo-mapping').length,missing:rows.filter(x=>!x.owned),inventoryUpdatedAt:snap?.updatedAt||null,catalogUpdatedAt:catalog.updatedAt};
 }
-window.CMMasterData={numberKey,setKey,normalizeVariant,chooseCollectionFile,importCollectionFile,refreshCollection,requestCollectionPermission,getSnapshot:()=>get(SNAPSHOT),storeVerifiedCatalog,getCatalog,progress,version:'0.2.0'};
+const SEARCH_TTL=24*60*60*1000;
+const searchKey=(set,language)=>'search:'+setKey(set)+':'+language;
+async function saveSearch(set,language,data){
+  await put(searchKey(set,language),{...data,savedAt:Date.now(),schema:1});
+}
+async function getSearch(set,language){
+  const saved=await get(searchKey(set,language));
+  if(saved?.schema!==1||Date.now()-(saved.scan?.createdAt||saved.savedAt)>SEARCH_TTL)return null;
+  return saved;
+}
+window.CMMasterData={saveSearch,getSearch,numberKey,setKey,normalizeVariant,chooseCollectionFile,importCollectionFile,refreshCollection,requestCollectionPermission,getSnapshot:()=>get(SNAPSHOT),storeVerifiedCatalog,getCatalog,progress,version:'0.2.0'};
 console.info('Master Set data adapter ready (isolated prototype).');
 })();
