@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "1.5.0";
+  const VERSION = "1.5.1";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -2020,29 +2020,44 @@
 
     try {
       onProgress?.("Buscando las fichas de la expansión…");
-      const visited=new Set();
-      let url=listURL;
-      while(!restore&&!visited.has(url.href)&&url.pathname===listPath){
-        visited.add(url.href);
-        const doc=await fetchDoc(url);
+      function indexProducts(doc,url,sourcePath){
         for(const link of doc.querySelectorAll('a[href*="/Pokemon/Products/Singles/"]')){
           const product=new URL(link.getAttribute("href"),url);
-          if(product.origin!==url.origin||!product.pathname.startsWith(listPath+"/"))continue;
-          // Printed number in Cardmarket's label takes precedence over the URL suffix.
-          const parsed=productCodeNumberFromHref(product.href);
+          if(product.origin!==location.origin||!product.pathname.startsWith(sourcePath+"/"))continue;
           const label=[link.textContent,link.title,link.querySelector("[title]")?.title].join(" ");
-          const printed=label.match(/\(\s*([A-Z0-9]+)\s+(\d+)\s*\)/i);
-          if(!printed||!parsed||!expansionCodesEquivalent(parsed.expansion,printed[1]))continue;
-          const number=masterNumber(printed[2]);
+          const printed=label.replace(/\(MEE(?=\d)/gi,"(MEE ").match(/\(\s*([A-Z0-9]+)\s+([A-Z]+\s+\d+|[BGR]\/RGB|\d+)\s*\)/i);
+          if(!printed)continue;
+          const special=printed[1].toUpperCase()==="30C"&&!/^\d+$/.test(printed[2]);
+          const parsed=productCodeNumberFromHref(product.href);
+          if(special){
+            // Validate both the explicit label and the composite URL identity.
+            const compact=value=>value.toUpperCase().replace(/[^A-Z0-9]/g,"").replace(/\d+/g,d=>String(Number(d)));
+            const suffix=decodeURIComponent(product.pathname.split("-").pop());
+            if(compact(suffix)!==compact(printed[1]+printed[2]))continue;
+          }else if(!parsed||!expansionCodesEquivalent(parsed.expansion,printed[1]))continue;
+          const number=window.CMMasterData.marketNumberKey(printed[1],printed[2],denominator);
           if(!expected.has(number))continue;
           product.search="";product.hash="";
-          const paths=byNumber.get(number)||new Set();
-          paths.add(product.href);
-          byNumber.set(number,paths);
+          const paths=byNumber.get(number)||new Set();paths.add(product.href);byNumber.set(number,paths);
         }
-        const next=nextPage(doc,url);
-        if(next.href===url.href)break;
-        url=next;
+      }
+      const sourcePaths=[listPath];
+      const energyPath=listPath.replace(/[^/]+$/,"Mega-Evolution-Energies");
+      if([...expected].some(n=>n.startsWith("MEE:")))sourcePaths.push(energyPath);
+      for(const sourcePath of new Set(sourcePaths)){
+        const visited=new Set();let url=new URL(sourcePath,location.origin);
+        while(!restore&&!visited.has(url.href)&&url.pathname===sourcePath){
+          visited.add(url.href);
+          const doc=await fetchDoc(url);indexProducts(doc,url,sourcePath);
+          const next=nextPage(doc,url);if(next.href===url.href)break;url=next;
+        }
+      }
+      // Newly released energies may be absent from the expansion's listing.
+      if(!restore)for(const number of expected){
+        if(!number.startsWith("MEE:")||byNumber.has(number))continue;
+        const url=new URL(listPath.split("/Pokemon/")[0]+"/Pokemon/Products/Search",location.origin);
+        url.searchParams.set("searchString","MEE "+number.split(":")[1].padStart(3,"0"));
+        indexProducts(await fetchDoc(url),url,energyPath);
       }
 
       for(const want of missing){
@@ -2088,7 +2103,10 @@
           const matches=[];
           noOfferReason="No pude verificar el acabado en las ofertas de la primera página";
           for(const {row,finish,id} of rows){
-            const exact=pattern?finish===want.variant:
+            const energyNeedsHolo=number.startsWith("MEE:")&&Number(number.split(":")[1])<=8&&want.variant==="holo";
+            const holoEvidence=[row,...row.querySelectorAll('[title], [aria-label], [data-is-foil]')].some(el=>
+              !el.closest('[class*="comment" i]')&&(/^(?:holo|holofoil|cosmos holo)$/i.test(el.getAttribute('title')||el.getAttribute('aria-label')||'')||el.getAttribute('data-is-foil')==='1'));
+            const exact=energyNeedsHolo?holoEvidence&&finish!=="reverse":pattern?finish===want.variant:
               want.variant==="reverse"?(!patterned&&(finish==="reverse"||!finish&&filterConfirmed)):
               ordinary&&!patterned&&(finish==="regular"||!finish&&(filterConfirmed||!hasReverse));
             if(!exact)continue;
@@ -2227,7 +2245,7 @@
             cardCost,shipCost,total:cardCost+shipCost}:null};
       },
       snapshot:()=>({
-        createdAt,listPath,missing,catalog,language,
+        mappingVersion:2,createdAt,listPath,missing,catalog,language,
         settings:{condition,cardMax:Number.isFinite(cardMax)?cardMax:null,countries},
         shipping:Object.fromEntries(results.map(s=>[norm(s.seller),s.shipping])),
         byNumber:[...byNumber].map(([n,paths])=>[n,[...paths]]),

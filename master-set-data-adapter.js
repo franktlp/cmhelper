@@ -26,6 +26,20 @@ function numberKey(value,denominator=null){
   const code=/^(CC|MEE)0*(\d+)(?:\/(\d+))?$/.exec(text);
   return code?code[1]+':'+Number(code[2])+(code[3]&&!(code[1]==='CC'&&Number(code[3])===30)?'/'+Number(code[3]):''):text;
 }
+// Cardmarket's 30C spoiler uses original print numbers for Classic Collection.
+// https://www.cardmarket.com/en/Pokemon/Spoilers/30th-Celebration
+const classicPrints='BS 58|BS 4|GH 18|GC 69|NG 25|NDE 106|AQ 149|RS 5|TRR 19|UF 108|DS 11|GE 106|LA 43|PL 47|TM 94|TM 99|TM 100|NVI 101|DRX 85|PLB 97|PRC 106|BKP 41|SUM 89|CIN 57|TEU 33|SSH 138|VIV 50|FST 114|BRS 123|PAL 203'.split('|');
+function marketNumberKey(code,printed,denominator){
+  code=String(code).toUpperCase();
+  const token=String(printed).trim().toUpperCase().replace(/\s+/g,' ');
+  if(code==='MEE'&&/^\d+$/.test(token))return numberKey('MEE '+token);
+  if(code==='30C'){
+    const classic=/^([A-Z]+)\s+0*(\d+)$/.exec(token);
+    if(classic){const index=classicPrints.indexOf(classic[1]+' '+Number(classic[2]));return index<0?null:'CC:'+(index+1)}
+    if(/^[BGR]\/RGB$/.test(token))return token;
+  }
+  return /^\d+$/.test(token)?numberKey(token,denominator):null;
+}
 const languages={Spanish:'es',English:'en',Japanese:'ja',French:'fr',German:'de',Italian:'it',Portuguese:'pt'};
 function decodeCollection(csv){const records=parseCSV(csv);if(!records.length||!['Expansion','Card number','Card variant','Card language','Quantity'].every(k=>k in records[0]))throw Error('El archivo no parece una exportación válida de TCGCollector');return records.map(r=>({set:r.Expansion,number:r['Card number'],name:r['Card name'],variant:normalizeVariant(r['Card variant']),language:languages[r['Card language']]||r['Card language'],quantity:Number(r.Quantity)||0})).filter(x=>x.set&&x.number&&x.quantity>0)}
 async function chooseCollectionFile(){if(!window.showOpenFilePicker)return {status:'file-picker-unavailable'};const [handle]=await window.showOpenFilePicker({multiple:false,types:[{description:'TCGCollector CSV',accept:{'text/csv':['.csv']}}]});if(!handle)return null;const file=await handle.getFile(),entries=decodeCollection(await file.text());await put(HANDLE,handle);await put(SNAPSHOT,{entries,filename:file.name,modified:file.lastModified,updatedAt:Date.now()});return {entries:entries.length,filename:file.name,modified:file.lastModified}}
@@ -58,6 +72,6 @@ async function getSearch(set,language){
   if(saved?.schema!==1||Date.now()-(saved.scan?.createdAt||saved.savedAt)>SEARCH_TTL)return null;
   return saved;
 }
-window.CMMasterData={saveSearch,getSearch,numberKey,setKey,normalizeVariant,chooseCollectionFile,importCollectionFile,refreshCollection,requestCollectionPermission,getSnapshot:()=>get(SNAPSHOT),storeVerifiedCatalog,getCatalog,progress,version:'0.2.0'};
+window.CMMasterData={saveSearch,getSearch,numberKey,marketNumberKey,setKey,normalizeVariant,chooseCollectionFile,importCollectionFile,refreshCollection,requestCollectionPermission,getSnapshot:()=>get(SNAPSHOT),storeVerifiedCatalog,getCatalog,progress,version:'0.2.0'};
 console.info('Master Set data adapter ready.');
 })();
