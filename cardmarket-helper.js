@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "1.5.1";
+  const VERSION = "1.5.2";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -2245,7 +2245,7 @@
             cardCost,shipCost,total:cardCost+shipCost}:null};
       },
       snapshot:()=>({
-        mappingVersion:2,createdAt,listPath,missing,catalog,language,
+        mappingVersion:3,createdAt,listPath,missing,catalog,language,
         settings:{condition,cardMax:Number.isFinite(cardMax)?cardMax:null,countries},
         shipping:Object.fromEntries(results.map(s=>[norm(s.seller),s.shipping])),
         byNumber:[...byNumber].map(([n,paths])=>[n,[...paths]]),

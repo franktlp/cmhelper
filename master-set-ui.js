@@ -1,4 +1,4 @@
-/* Master Set Manager UI 1.5.1 — integrated with Cardmarket Helper.
+/* Master Set Manager UI 1.5.2 — integrated with Cardmarket Helper.
  * Requires CMMasterData, CMPokeCottageXLSX and the Helper search/cart module.
  */
 (()=>{'use strict';
@@ -59,7 +59,7 @@ const detached=new MutationObserver(()=>{
 });
 detached.observe(document.body,{childList:true,subtree:true});
 const head=el('div');head.style='margin:8px 0;font-size:12px;color:#666';
-head.append(el('span',{},'Master Sets · 1.5.1'));p.append(head);
+head.append(el('span',{},'Master Sets · 1.5.2'));p.append(head);
 const context=el('div');context.style='margin:10px 0;padding:8px;background:#f1f3f5;border-radius:6px;font-size:13px';p.append(context);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
 const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');const search=el('button',{type:'button',disabled:true},'Buscar faltantes en Cardmarket');actions.append(choose,catalog,search);p.append(actions);
@@ -96,7 +96,7 @@ async function render(){
   const stored=await window.CMMasterData.getSearch(config.id,state.lang);
   const savedCatalog=await window.CMMasterData.getCatalog(config.id);
   if(version!==renderVersion)return;
-  if(stored&&stored.scan.mappingVersion===2&&stored.inventoryUpdatedAt===snapshot.updatedAt&&stored.catalogUpdatedAt===savedCatalog.updatedAt){
+  if(stored&&stored.scan.mappingVersion===3&&stored.inventoryUpdatedAt===snapshot.updatedAt&&stored.catalogUpdatedAt===savedCatalog.updatedAt){
     sessionData=stored;
     const response=await window.CMHelperSearchMasterOffers({
       missing:stored.scan.missing,catalog:stored.scan.catalog,language:state.lang,
@@ -374,7 +374,7 @@ function installTabs(){
   return true;
 }
 function activateMaster(){if(installTabs())showMode?.('master')}
-window.CMMasterUI={mount:activateMaster,updateCatalog,version:'1.5.1'};
+window.CMMasterUI={mount:activateMaster,updateCatalog,version:'1.5.2'};
 if(!installTabs()){
   const observer=new MutationObserver(()=>{
     if(installTabs())observer.disconnect();

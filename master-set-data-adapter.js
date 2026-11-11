@@ -58,7 +58,22 @@ async function progress(set,language,tier){
   function key(entry){
     return numberKey(entry.number,denominator)+'|'+normalizeVariant(entry.variant);
   }
-  const owned=new Set((snap?.entries||[]).filter(x=>x.language===language&&setKey(x.set)===setKey(set)).map(key));
+  const owned=new Set();
+  for(const entry of snap?.entries||[]){
+    if(entry.language!==language||!(entry.quantity>0))continue;
+    if(setKey(entry.set)===setKey(set)){owned.add(key(entry));continue}
+    // TCGCollector puts these shared cards in their own expansion and exports
+    // bare numbers (009), whereas the 30C checklist prints MEE 009.
+    // Keep the prefix, language and finish: normal energies never own holo ones.
+    if(setKey(set)==='30thcelebration'&&setKey(entry.set)==='megaevolutionenergies'){
+      const number=numberKey(entry.number);
+      if(/^(?:MEE:)?[0-9]+$/.test(number)){
+        const energyNumber=Number(number.replace(/^MEE:/,''));
+        if(energyNumber>=1&&energyNumber<=16)
+          owned.add('MEE:'+energyNumber+'|'+normalizeVariant(entry.variant));
+      }
+    }
+  }
   const rows=variants.map(x=>({...x,owned:x.tier==='grand'?false:owned.has(key(x)),matchStatus:x.tier==='grand'?'unverified-promo-mapping':'matched-by-number-and-foil'}));
   return {status:'ok',set,language,tier,total:rows.length,owned:rows.filter(x=>x.owned).length,unverified:rows.filter(x=>x.matchStatus==='unverified-promo-mapping').length,missing:rows.filter(x=>!x.owned),inventoryUpdatedAt:snap?.updatedAt||null,catalogUpdatedAt:catalog.updatedAt};
 }
@@ -72,6 +87,6 @@ async function getSearch(set,language){
   if(saved?.schema!==1||Date.now()-(saved.scan?.createdAt||saved.savedAt)>SEARCH_TTL)return null;
   return saved;
 }
-window.CMMasterData={saveSearch,getSearch,numberKey,marketNumberKey,setKey,normalizeVariant,chooseCollectionFile,importCollectionFile,refreshCollection,requestCollectionPermission,getSnapshot:()=>get(SNAPSHOT),storeVerifiedCatalog,getCatalog,progress,version:'0.2.0'};
+window.CMMasterData={saveSearch,getSearch,numberKey,marketNumberKey,setKey,normalizeVariant,chooseCollectionFile,importCollectionFile,refreshCollection,requestCollectionPermission,getSnapshot:()=>get(SNAPSHOT),storeVerifiedCatalog,getCatalog,progress,version:'0.2.1'};
 console.info('Master Set data adapter ready.');
 })();
