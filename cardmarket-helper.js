@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "5.4.33 Rich Diagnostics";
+  const VERSION = "1.5.0";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -784,7 +784,37 @@
       .catch(e=>console.warn("No pude guardar vendedor en IndexedDB",record.seller,e));
   }
 
-  const loadSellers = () => sellersMemory;
+  const SHIPPING_OVERRIDES_KEY="cm_helper_shipping_overrides_v1";
+  function loadShippingOverrides(){
+    try{return JSON.parse(localStorage.getItem(SHIPPING_OVERRIDES_KEY)||"{}")}catch{return {}}
+  }
+  function shippingFor(seller,fallback=0){
+    const value=loadShippingOverrides()[norm(seller)]?.value;
+    return Number.isFinite(value)&&value>=0?value:Number(fallback)||0;
+  }
+  function saveShippingOverrides(changes){
+    const saved=loadShippingOverrides();
+    for(const {seller,value} of changes){
+      if(!Number.isFinite(value)||value<0)throw Error("Portes inválidos para "+seller);
+      saved[norm(seller)]={value,updatedAt:Date.now()};
+    }
+    localStorage.setItem(SHIPPING_OVERRIDES_KEY,JSON.stringify(saved));
+    const records=loadSellers();
+    for(const record of Object.values(records)){
+      const entry=saved[norm(record.seller)];
+      if(entry)record.shipping=entry.value;
+    }
+    saveSellers(records);
+    window.dispatchEvent(new CustomEvent("cm-helper-shipping-changed"));
+  }
+
+  const loadSellers = () => {
+    const overrides=loadShippingOverrides();
+    for(const record of Object.values(sellersMemory)){
+      if(overrides[norm(record.seller)])record.shipping=overrides[norm(record.seller)].value;
+    }
+    return sellersMemory;
+  };
 
   const saveSellers = obj => {
     sellersMemory=obj || {};
@@ -1865,12 +1895,380 @@
     return "";
   }
 
+  function extractMasterArticleId(row) {
+    const ids=new Set();
+    const add=value=>{if(/^\d+$/.test(value||""))ids.add(value)};
+    const selector='[id],[data-article-id],[data-id-article],[data-idarticle],[data-articleid],input[name],button[name],[onclick],[href],[formaction]';
+    for(const el of [row,...row.querySelectorAll(selector)]){
+      add(el.id?.match(/^(?:stockRow|articleRow|article)[-_]?(\d+)$/i)?.[1]);
+      for(const attr of ["data-article-id","data-id-article","data-idarticle","data-articleid"])add(el.getAttribute(attr));
+      const name=el.getAttribute("name")||"";
+      add(name.match(/^idArticle\[(\d+)\]$/i)?.[1]);
+      if(/^idArticle$/i.test(name))add(el.value);
+      for(const attr of ["onclick","href","formaction"]){
+        const text=el.getAttribute(attr)||"";
+        for(const m of text.matchAll(/(?:[?&]idArticle=|\bidArticle["']?\s*:\s*["']?)(\d+)\b/gi))add(m[1]);
+      }
+    }
+    return ids.size===1?[...ids][0]:"";
+  }
+
   function sellerNameFromRow(row) {
     const a=row?.querySelector('a[href*="/Users/"]');
     if(!a) return "";
     const m=(a.getAttribute("href")||"").match(/\/Users\/([^/?#]+)/i);
     return m ? decodeURIComponent(m[1]) : (a.textContent||"").trim();
   }
+
+  // Read-only Master Sets scan. Variant offers never enter the legacy seller cache.
+  const MASTER_ATTEMPTS='cm_master_cart_attempts_v1';
+  const ATTEMPT_TTL=24*60*60*1000;
+  function readMasterAttempts(){
+    const saved=JSON.parse(localStorage.getItem(MASTER_ATTEMPTS)||"{}");
+    return Object.fromEntries(Object.entries(saved).filter(([,time])=>Number.isFinite(time)&&Date.now()-time<ATTEMPT_TTL));
+  }
+  function hasMasterAttempt(key){return Object.hasOwn(readMasterAttempts(),key)}
+  function markMasterAttempt(key){
+    localStorage.setItem(MASTER_ATTEMPTS,JSON.stringify({...readMasterAttempts(),[key]:Date.now()}));
+  }
+  function clearMasterAttempt(key){
+    const saved=readMasterAttempts();delete saved[key];
+    localStorage.setItem(MASTER_ATTEMPTS,JSON.stringify(saved));
+  }
+  let masterCartBusy=false;
+  window.CMHelperSearchMasterOffers = async function ({
+    missing, catalog, language, signal, onProgress, restore, listPath:storedPath
+  }) {
+    const listPath=storedPath||location.pathname.match(/^\/(?:en|es)\/Pokemon\/Products\/Singles\/[^/]+/i)?.[0];
+    if(!listPath) throw Error("Abre la expansión en Cardmarket en español o inglés.");
+    const listURL=new URL(listPath,location.origin);
+    if(listURL.origin!==location.origin||!/^\/(?:en|es)\/Pokemon\/Products\/Singles\/[^/]+$/i.test(listURL.pathname))throw Error("Expansión guardada inválida.");
+    const ranks=["MT","NM","EX","GD","LP","PL","PO"];
+    const condition=(restore?.settings?.condition||$("#cm-condition")?.value||"NM").toUpperCase();
+    const maxCondition=ranks.indexOf(condition)+1;
+    const languageId=languageIdForWant({language});
+    if(!languageId||!maxCondition) throw Error("Idioma o estado inválido.");
+    const perCard=String($("#cm-card-max-price")?.value||"").trim().replace(",",".");
+    const cardMax=restore?.settings?(restore.settings.cardMax??Infinity):perCard===""?Infinity:Number(perCard);
+    if(Number.isNaN(cardMax)||cardMax<0) throw Error("El máximo por carta no es válido.");
+    const budget=getCartMaxPrice();
+    const defaultShipping=Math.max(0,Number(($("#cm-default-ship")?.value||"0").replace(",","."))||0);
+    const saved=new Map(Object.values(loadSellers()).map(s=>[norm(s.seller),s]));
+    const countries=restore?.settings?.countries||discoveryCountryCodes().map(code=>CARDMARKET_COUNTRY_IDS[code]);
+    const delay=Math.max(1200,Number($("#cm-page-delay")?.value)||0);
+    const mainNumber=catalog.find(x=>x.tier==="master"&&/^\d+\/\d+$/.test(x.number))?.number;
+    const denominator=Number(mainNumber?.split("/")[1])||null;
+    const masterNumber=value=>window.CMMasterData.numberKey(value,denominator);
+    const expected=new Set(missing.map(w=>masterNumber(w.number)));
+    const byNumber=new Map(restore?.byNumber?.map(([n,paths])=>[n,new Set(paths)])||[]);
+    const offers=new Map(),cartOffers=new Map();
+    const issues=[];
+    const cartKey=o=>[o.set,o.language,o.key].join("|");
+    let checked=0, stopped=restore?.stopped||"";
+    const createdAt=restore?.createdAt||Date.now();
+    const nextLink='a[rel="next"], a[aria-label="Siguiente página"], a[aria-label="Next page"]';
+    const nextPage=(doc,url)=>new URL(doc.querySelector(nextLink)?.getAttribute("href")||"",url);
+    let firstRequest=true;
+    async function fetchDoc(url){
+      if(url.origin!==location.origin) throw Error("Enlace externo descartado.");
+      if(!firstRequest) await sleep(delay);
+      firstRequest=false;
+      signal?.throwIfAborted();
+      const res=await fetchWithBackoff(url.href,{credentials:"include",signal,redirect:"error",
+        headers:{Accept:"text/html,application/xhtml+xml"}},"Master Sets",0);
+      if(!res.ok) throw Error("Cardmarket HTTP "+res.status);
+      const html=await res.text();
+      if(/just a moment|verify you are human|captcha|checking your browser/i.test(html)) throw Error("Cardmarket ha pedido una verificación.");
+      return new DOMParser().parseFromString(html,"text/html");
+    }
+
+    function reverseFlag(value){
+      const flag=norm(value);
+      if(["y","yes","si","true","1"].includes(flag))return "Y";
+      if(["n","no","false","0"].includes(flag))return "N";
+      return "";
+    }
+
+    function finishFromRow(row){
+      // Seller comments are free text and cannot establish a finish.
+      const attrs=["title","aria-label","data-bs-title","data-bs-original-title","data-original-title",
+        "data-tooltip","alt","class","href","xlink:href","data-is-reverse-holo","data-reverse-holo"];
+      const labels=[];
+      let flag="";
+      for(const el of [row,...row.querySelectorAll(attrs.map(attr=>"["+CSS.escape(attr)+"]").join(","))]){
+        if(el.closest('.article-comments, .article-comment, .article-description, .seller-comment, [class*="comment" i]'))continue;
+        flag||=reverseFlag(el.getAttribute("data-is-reverse-holo")||el.getAttribute("data-reverse-holo"));
+        for(const attr of attrs){
+          if((attr==="href"||attr==="xlink:href")&&el.localName!=="use")continue;
+          labels.push(el.getAttribute(attr));
+        }
+      }
+      const text=norm(labels.join(" ")).replace(/[-_]/g," ");
+      if(/master\s*ball/.test(text))return "master ball";
+      if(/poke\s*ball/.test(text))return "poké ball";
+      if(/cosmos|stamped|\bsello\b|first edition/.test(text))return "other";
+      if(flag==="N"||/non reverse|not reverse|no reverse|sin reverse/.test(text))return "regular";
+      if(flag==="Y"||/reverse holo|holo invers[ao]|reverseholo|icon reverse\b/.test(text))return "reverse";
+      return "";
+    }
+
+    function selectedReverseFilter(doc){
+      const controls=doc.querySelectorAll('select[name="isReverseHolo" i], input[name="isReverseHolo" i]:checked, input[name="isReverseHolo" i][type="hidden"]');
+      const selected=new Set([...controls].map(control=>reverseFlag(control.value)).filter(Boolean));
+      return selected.size===1?[...selected][0]:"";
+    }
+
+    try {
+      onProgress?.("Buscando las fichas de la expansión…");
+      const visited=new Set();
+      let url=listURL;
+      while(!restore&&!visited.has(url.href)&&url.pathname===listPath){
+        visited.add(url.href);
+        const doc=await fetchDoc(url);
+        for(const link of doc.querySelectorAll('a[href*="/Pokemon/Products/Singles/"]')){
+          const product=new URL(link.getAttribute("href"),url);
+          if(product.origin!==url.origin||!product.pathname.startsWith(listPath+"/"))continue;
+          // Printed number in Cardmarket's label takes precedence over the URL suffix.
+          const parsed=productCodeNumberFromHref(product.href);
+          const label=[link.textContent,link.title,link.querySelector("[title]")?.title].join(" ");
+          const printed=label.match(/\(\s*([A-Z0-9]+)\s+(\d+)\s*\)/i);
+          if(!printed||!parsed||!expansionCodesEquivalent(parsed.expansion,printed[1]))continue;
+          const number=masterNumber(printed[2]);
+          if(!expected.has(number))continue;
+          product.search="";product.hash="";
+          const paths=byNumber.get(number)||new Set();
+          paths.add(product.href);
+          byNumber.set(number,paths);
+        }
+        const next=nextPage(doc,url);
+        if(next.href===url.href)break;
+        url=next;
+      }
+
+      for(const want of missing){
+        signal?.throwIfAborted();
+        const number=masterNumber(want.number);
+        const key=number+":"+want.variant;
+        const paths=byNumber.get(number);
+        onProgress?.("Buscando "+(checked+1)+"/"+missing.length+" · "+want.name+" · "+want.variant);
+        if(paths?.size!==1){
+          issues.push({...want,reason:paths?"Varias fichas coinciden":"Ficha exacta sin localizar para esta numeración"});
+          checked++;
+          continue;
+        }
+        const product=new URL([...paths][0]);
+        product.searchParams.set("language",languageId);
+        product.searchParams.set("minCondition",String(maxCondition));
+        if(countries.length)product.searchParams.set("sellerCountry",countries.join(","));
+        const sameCard=catalog.filter(x=>x.tier==="master"&&masterNumber(x.number)===number);
+        const patterned=sameCard.some(x=>x.variant==="poké ball"||x.variant==="master ball");
+        const hasReverse=sameCard.some(x=>x.variant==="reverse");
+        const pattern=want.variant==="poké ball"||want.variant==="master ball";
+        const ordinary=want.variant==="normal"||want.variant==="holo";
+        const reverseFilter=want.variant==="reverse"?"Y":ordinary&&hasReverse?"N":"";
+        if(reverseFilter)product.searchParams.set("isReverseHolo",reverseFilter);
+        let noOfferReason="Cardmarket no devolvió ofertas en la primera página";
+        const readOffers=async()=>{
+          const doc=await fetchDoc(product);
+          const rows=[...doc.querySelectorAll(".article-row")].map(row=>({
+            row,finish:finishFromRow(row),id:extractMasterArticleId(row)
+          }));
+          if(!rows.length)return [];
+          const applied=selectedReverseFilter(doc);
+          let filterConfirmed=!!reverseFilter&&applied===reverseFilter;
+          // Some pages omit the selected filter in their HTML. Check whether
+          // switching only the reverse filter separates the exact article IDs.
+          if(reverseFilter&&!applied&&!patterned&&!rows.some(r=>r.finish)&&rows.some(r=>r.id)){
+            const opposite=new URL(product);
+            opposite.searchParams.set("isReverseHolo",reverseFilter==="Y"?"N":"Y");
+            const comparison=await fetchDoc(opposite);
+            const ids=new Set([...comparison.querySelectorAll(".article-row")].map(extractMasterArticleId).filter(Boolean));
+            filterConfirmed=ids.size>0&&rows.every(r=>r.id&&!ids.has(r.id));
+          }
+          const matches=[];
+          noOfferReason="No pude verificar el acabado en las ofertas de la primera página";
+          for(const {row,finish,id} of rows){
+            const exact=pattern?finish===want.variant:
+              want.variant==="reverse"?(!patterned&&(finish==="reverse"||!finish&&filterConfirmed)):
+              ordinary&&!patterned&&(finish==="regular"||!finish&&(filterConfirmed||!hasReverse));
+            if(!exact)continue;
+            if(!matches.length)noOfferReason="Acabado localizado, pero sin oferta que cumpla idioma, estado y precio";
+            const offerLanguage=detectOfferLanguage(row);
+            if(!languageMatchesWant(offerLanguage,language))continue;
+            const state=row.querySelector(".article-condition .badge")?.textContent.trim();
+            if(!ranks.includes(state)||ranks.indexOf(state)+1>maxCondition)continue;
+            const seller=sellerNameFromRow(row);
+            const price=euro((row.querySelector(".price-container .fw-bold")||
+              row.querySelector(".col-offer .fw-bold")||row.querySelector(".mobile-offer-container .fw-bold"))?.textContent);
+            if(!seller||!Number.isFinite(price)||price<=0||price>cardMax)continue;
+            matches.push({...want,key,seller,price,price_eur:price,url:product.href,condition:state,
+              article_id:id,country:detectCountryFromElement(row),language:offerLanguage});
+          }
+          return matches;
+        };
+        const verify=async offer=>{
+          const current=await readOffers();
+          return current.some(o=>o.article_id===offer.article_id&&o.seller===offer.seller&&
+            o.price_eur===offer.price_eur&&o.condition===offer.condition);
+        };
+        let found=false;
+        const restoredOffers=restore?.offers?.filter(o=>o.key===key)||[];
+        for(const offer of restore?restoredOffers:await readOffers()){
+          const sellerKey=norm(offer.seller);
+          const items=offers.get(sellerKey)||new Map();
+          if(!items.has(key)||items.get(key).price>offer.price)items.set(key,{...offer,verify});
+          offers.set(sellerKey,items);
+          if(offer.article_id){
+            const buyable=cartOffers.get(sellerKey)||new Map();
+            if(!buyable.has(key)||buyable.get(key).price>offer.price)buyable.set(key,{...offer,verify});
+            cartOffers.set(sellerKey,buyable);
+          }
+          found=true;
+        }
+        if(!restore&&!found)issues.push({...want,reason:noOfferReason});
+        checked++;
+      }
+    } catch(e){
+      stopped=signal?.aborted?"Búsqueda detenida":e.message;
+    }
+
+    if(restore)issues.push(...(restore.issues||[]));
+    const results=[],planSellers=[];
+    const staleIds=new Set(restore?.staleIds||[]);
+    function refreshShipping(){
+      results.length=0;planSellers.length=0;
+    for(const [sellerKey,items] of offers){
+      const shipping=shippingFor([...items.values()][0].seller,restore?.shipping?.[sellerKey]??saved.get(sellerKey)?.shipping??defaultShipping);
+      const eligible=[...(cartOffers.get(sellerKey)?.values()||[])].filter(o=>!hasMasterAttempt(cartKey(o)));
+      if(eligible.length)planSellers.push({seller:eligible[0].seller,shipping,
+        country:saved.get(sellerKey)?.country||eligible.find(o=>o.country)?.country||"",offers:eligible});
+      const selected=[];
+      let cents=Math.round(shipping*100);
+      for(const item of [...items.values()].sort((a,b)=>a.price-b.price)){
+        const price=Math.round(item.price*100);
+        if(budget!=null&&cents+price>Math.round(budget*100))break;
+        cents+=price;
+        selected.push(item);
+      }
+      if(selected.length)results.push({seller:selected[0].seller,items:selected,shipping,total:cents/100});
+    }
+    results.sort((a,b)=>b.items.length-a.items.length||a.total-b.total||a.seller.localeCompare(b.seller));
+    }
+    refreshShipping();
+    const shippingChanged=!!restore&&[...offers].some(([key,items])=>
+      shippingFor([...items.values()][0].seller,restore.shipping?.[key]??defaultShipping)!==restore.shipping?.[key]);
+    return {results,checked,issues,stopped,refreshShipping,shippingChanged,
+      shippingSellers:()=>[...offers].map(([key,items])=>({
+        seller:[...items.values()][0].seller,country:saved.get(key)?.country||"",
+        shipping:shippingFor([...items.values()][0].seller,restore?.shipping?.[key]??saved.get(key)?.shipping??defaultShipping),
+        wantsCount:items.size,wantsValue:[...items.values()].reduce((sum,o)=>sum+o.price_eur,0)
+      })),
+      analyze:async()=>{
+        refreshShipping();
+        const available=planSellers.map(s=>({...s,offers:s.offers.filter(o=>
+          !hasMasterAttempt(cartKey(o))&&!staleIds.has(o.article_id))})).filter(s=>s.offers.length);
+        const analysis=available.length?await buildSmartPlan(missing.map(w=>({...w,language,key:masterNumber(w.number)+":"+w.variant})),available):
+          {best:null,valued:{},valuationRows:[],cartMaxPrice:getCartMaxPrice()};
+        const {best,valuationRows,cartMaxPrice}=analysis;
+        const evaluations=new Map(valuationRows.map(v=>[JSON.stringify([v.seller,v.key]),v]));
+        const diagnostics=results.map(seller=>{
+          const needsShipping=!best?.sellerUse?.[seller.seller];
+          const rows=seller.items.map(o=>{
+            const v=evaluations.get(JSON.stringify([o.seller,o.key]));
+            const selected=best?.selected?.[o.key];
+            let status,detail="";
+            if(!o.article_id){
+              status="Sin ID de artículo en esta oferta";
+              if(v)detail="Oferta alternativa del mismo vendedor con ID: "+fmt(v.price_eur)+
+                (selected?.seller===o.seller?" · incluida en el plan":" · no incluida en el plan");
+            }
+            else if(hasMasterAttempt(cartKey(o)))status="Ya procesada para el carrito";
+            else if(staleIds.has(o.article_id))status="Oferta desactualizada";
+            else if(!v)status="Oferta sin valorar";
+            else if(["OUTLIER","EXPENSIVE"].includes(v.verdict)){
+              status="Precio por encima del límite";
+              detail=fmt(o.price_eur)+" frente al máximo de "+fmt(v.ceiling_eur)+" (referencia "+fmt(v.market_ref_eur)+")";
+            }else if(!["GOOD","OK"].includes(v.verdict))status="Sin referencia de precio suficiente";
+            else if(selected?.seller===o.seller)status="Incluida en el plan";
+            else if(selected){
+              status="Asignada a otro vendedor";
+              detail=selected.seller+" · "+fmt(selected.price_eur);
+            }else if(cartMaxPrice!==null&&(best?.total||0)+o.price_eur+(needsShipping?seller.shipping:0)>cartMaxPrice+1e-9){
+              status="Superaría el presupuesto al ampliar el plan";
+              detail="Presupuesto total de "+fmt(cartMaxPrice);
+            }else status="Oferta válida sin asignar en el reparto";
+            return {key:o.key,status,detail};
+          });
+          return {seller:seller.seller,rows};
+        });
+        return {...analysis,diagnostics};
+      },
+      restoreAnalysis:saved=>{
+        if(!saved)return null;
+        const selected={};
+        for(const [key,offer] of Object.entries(saved.best?.selected||{})){
+          const original=planSellers.find(s=>s.seller===offer.seller)?.offers.find(o=>
+            o.key===key&&o.article_id===offer.article_id&&o.price_eur===offer.price_eur);
+          if(original&&!hasMasterAttempt(cartKey(original)))selected[key]={...offer,original};
+        }
+        const sellerUse={};
+        for(const offer of Object.values(selected)){
+          const totals=sellerUse[offer.seller]||={count:0,cost:0};
+          totals.count++;totals.cost+=offer.price_eur;
+        }
+        const cardCost=Object.values(sellerUse).reduce((sum,o)=>sum+o.cost,0);
+        const shipCost=planSellers.filter(s=>sellerUse[s.seller]).reduce((sum,s)=>sum+s.shipping,0);
+        const diagnostics=saved.diagnostics?.map(seller=>({...seller,rows:seller.rows.map(row=>{
+          const original=planSellers.find(s=>s.seller===seller.seller)?.offers.find(o=>o.key===row.key);
+          return original&&hasMasterAttempt(cartKey(original))?{...row,status:"Ya procesada para el carrito",detail:""}:row;
+        })}))||[];
+        return {...saved,diagnostics,processedAll:!!saved.best?.coverage&&!Object.keys(selected).length,best:Object.keys(selected).length?
+          {...saved.best,coverage:Object.keys(selected).length,selected,sellerUse,chosen:Object.keys(sellerUse),
+            cardCost,shipCost,total:cardCost+shipCost}:null};
+      },
+      snapshot:()=>({
+        createdAt,listPath,missing,catalog,language,
+        settings:{condition,cardMax:Number.isFinite(cardMax)?cardMax:null,countries},
+        shipping:Object.fromEntries(results.map(s=>[norm(s.seller),s.shipping])),
+        byNumber:[...byNumber].map(([n,paths])=>[n,[...paths]]),
+        offers:[...offers.values(),...cartOffers.values()].flatMap(items=>[...items.values()]).map(({verify,...o})=>o),
+        issues,stopped,checked,staleIds:[...staleIds]
+      }),
+      addPack:pack=>navigator.locks?navigator.locks.request("cm-master-cart",()=>addPack(pack)):addPack(pack),
+      get covered(){return new Set(results.flatMap(s=>s.items.map(o=>o.key))).size}};
+    async function addPack(pack){
+        if(masterCartBusy)throw Error("Ya se está añadiendo un lote.");
+        const allowed=new Set(planSellers.flatMap(s=>s.offers));
+        const packKeys=new Set();
+        const pending=pack.map(o=>o.original).filter(o=>{
+          if(!allowed.has(o))return false;
+          const key=cartKey(o);
+          if(hasMasterAttempt(key)||packKeys.has(key)||staleIds.has(o.article_id))return false;
+          packKeys.add(key);
+          return true;
+        });
+        if(!pending.length)return {added:0,skipped:0,stopped:"El lote ya está procesado."};
+        masterCartBusy=true;
+        let added=0,skipped=0,stopped="";
+        try{
+          const token=await getCurrentCartToken(pending[0].url);
+          for(const o of pending){
+            if(!await o.verify(o)){staleIds.add(o.article_id);skipped++;continue}
+            markMasterAttempt(cartKey(o));
+            try{
+              await addArticleToCart(o.article_id,token,1,o.url);
+              added++;
+            }catch(e){
+              if(e.cartType==="unavailable"){clearMasterAttempt(cartKey(o));staleIds.add(o.article_id);skipped++;continue}
+              throw e;
+            }
+            await sleep(1400);
+          }
+        }catch(e){stopped=e.message}
+        finally{masterCartBusy=false}
+        return {added,skipped,stopped};
+    }
+  };
 
   function tokenFromDoc(doc) {
     const inp=doc?.querySelector?.('input[name="__cmtkn"]');
@@ -2031,7 +2429,7 @@
         scanned_at:new Date().toISOString(),
         expansion:"MULTI",
         scan_mode:"MULTI_SET",
-        shipping:Number(previous.shipping ?? defaultShipping),
+        shipping:shippingFor(seller,previous.shipping ?? defaultShipping),
         wants_count:wants.length,
         offers:merged,
         total_raw_offers:raw,
@@ -2892,26 +3290,31 @@
 
 
 
-  async function buildSmartPlan(wants) {
+  async function buildSmartPlan(wants, masterSellers) {
     const log = $("#cm-log");
-    await enrichUnknownSellerCountries();
-    const sellers = Object.values(loadSellers());
-    if (!sellers.length) throw new Error("No hay vendedores guardados.");
+    if(!masterSellers)await enrichUnknownSellerCountries();
+    const sellers = masterSellers||Object.values(loadSellers());
+    if (!sellers.length) throw new Error(masterSellers?"No hay ofertas con ID de artículo para preparar el carrito.":"No hay vendedores guardados.");
 
     const premiumInput = parseFloat($("#cm-premium").value.replace(",","."));
     const toleranceInput = parseFloat($("#cm-abs-tol").value.replace(",","."));
     const premiumPct = Number.isFinite(premiumInput) ? Math.max(0,premiumInput) : 20;
     const absTol = Number.isFinite(toleranceInput) ? Math.max(0,toleranceInput) : 0.50;
     log.textContent += `Margen de precio: ${premiumPct}% o ${fmt(absTol)}, el mayor de los dos.\n`;
-    log.textContent += `Optimización económica: cartas < 0,50 € pesan progresivamente menos al abrir vendedores nuevos.\n`;
+    if(masterSellers)log.textContent += "Master Sets: prioridad a la cobertura por euro, incluidos los portes.\n";
+    else log.textContent += `Optimización económica: cartas < 0,50 € pesan progresivamente menos al abrir vendedores nuevos.\n`;
     const marketDelay = Math.max(1200, parseInt($("#cm-market-delay").value || "4000",10));
     const cartMaxPrice = getCartMaxPrice();
 
-    const observations = allObservedOffers();
-    const wantsMap = wantedByKey(wants);
-    const baseOnly = false;
-    let targetKeys = wants.map(w=>cardKey(w)).filter(Boolean);
-    if (baseOnly) targetKeys = targetKeys.filter(k => parseInt(k.split(":").pop(),10) <= 165);
+    const planKey=masterSellers?o=>o.key:cardKey;
+    const observations=masterSellers?Object.create(null):allObservedOffers();
+    if(masterSellers)for(const seller of sellers){
+      for(const offer of seller.offers){
+        (observations[planKey(offer)]||=[]).push({...offer,original:offer,shipping:seller.shipping});
+      }
+    }
+    const wantsMap=masterSellers?Object.fromEntries(wants.map(w=>[planKey(w),w])):wantedByKey(wants);
+    const targetKeys=wants.map(planKey).filter(Boolean);
     const target = new Set(targetKeys.length ? targetKeys : Object.keys(observations));
 
     // Value each exact expansion+number appearing in seller observations.
@@ -2943,7 +3346,7 @@
         cheapest.price_eur >= 0.50 ||
         spreadRatio >= 1.5;
 
-      if (needMarket) {
+      if (needMarket&&!masterSellers) {
         log.textContent += `Valorando ${cheapest.name} (${k}) [${idx+1}/${keys.length}]...\n`;
         log.scrollTop = log.scrollHeight;
         try {
@@ -3035,7 +3438,7 @@
     // value/savings they contribute economically justify their extra shipping.
     let best = null;
 
-    if (sellers.length <= 18) {
+    if (!masterSellers && sellers.length <= 18) {
       const totalMasks = 1 << sellers.length;
 
       for (let mask=1; mask<totalMasks; mask++) {
@@ -3117,6 +3520,22 @@
             const offer = acceptableByKey[k]?.filter(o=>o.seller===s.seller).sort((a,b)=>a.price_eur-b.price_eur)[0];
             if (offer) { added.push([k,offer]); cost += offer.price_eur||0; }
           }
+          if(masterSellers){
+            if(cartMaxPrice!==null&&runningTotal+cost>cartMaxPrice+1e-9){
+              cost=Number(s.shipping||0);
+              added=added.sort(([,a],[,b])=>a.price_eur-b.price_eur).filter(([,o])=>{
+                if(runningTotal+cost+o.price_eur>cartMaxPrice+1e-9)return false;
+                cost+=o.price_eur;
+                return true;
+              });
+            }
+            if(!added.length)continue;
+            const score=added.length/Math.max(cost,0.01);
+            if(!pick||score>pick.score||(score===pick.score&&added.length>pick.added.length)){
+              pick={seller:s.seller,added,cost,score};
+            }
+            continue;
+          }
           if (!added.length) continue;
           if (cartMaxPrice !== null && runningTotal + cost > cartMaxPrice + 1e-9) continue;
           if (!sellerMarginalOrderAcceptable(s, added)) continue;
@@ -3144,17 +3563,18 @@
         const avail=acceptableByKey[k].filter(o=>chosen.includes(o.seller)).sort((a,b)=>a.price_eur-b.price_eur);
         selected[k]=avail[0]; cardCost += avail[0].price_eur||0;
       }
-      const shipCost=chosen.reduce((sum,name)=>sum+Number(sellers.find(s=>s.seller===name)?.shipping||0),0);
-      const total=cardCost+shipCost;
       const sellerUse={};
       for(const o of Object.values(selected)){
         if(!sellerUse[o.seller]) sellerUse[o.seller]={count:0,cost:0};
         sellerUse[o.seller].count++;
         sellerUse[o.seller].cost+=o.price_eur||0;
       }
-      const chosenRecords=sellers.filter(s=>chosen.includes(s.seller));
+      const used=masterSellers?chosen.filter(name=>sellerUse[name]):chosen;
+      const chosenRecords=sellers.filter(s=>used.includes(s.seller));
+      const shipCost=chosenRecords.reduce((sum,s)=>sum+Number(s.shipping||0),0);
+      const total=cardCost+shipCost;
       const effectiveTotal=countryEffectiveCost(total,chosenRecords,sellerUse);
-      best={coverage:Object.keys(selected).length,total,effectiveTotal,cardCost,shipCost,selected,chosen,sellerUse};
+      best={coverage:Object.keys(selected).length,total,effectiveTotal,cardCost,shipCost,selected,chosen:used,sellerUse};
     }
 
     return {
@@ -3267,6 +3687,10 @@
       return;
     }
 
+    openShippingEditor(sellers,"Wants");
+  };
+  function openShippingEditor(sellers,mode="Master Sets"){
+    if(!sellers.length)throw Error("No hay vendedores que mostrar.");
     const existing = document.getElementById("cm-shipping-editor");
     if (existing) existing.remove();
 
@@ -3288,17 +3712,17 @@
         <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">${fmt(s.wantsValue)}</td>
         <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">
           <input data-seller="${s.seller.replace(/"/g,'&quot;')}" class="cm-ship-input"
-            value="${Number(s.shipping||0).toFixed(2)}"
+            value="${shippingFor(s.seller,s.shipping).toFixed(2)}" data-initial="${shippingFor(s.seller,s.shipping).toFixed(2)}"
             style="width:80px;padding:4px;text-align:right"> €
         </td>
       </tr>
     `).join("");
 
     editor.innerHTML = `
-      <div style="font-size:18px;font-weight:700;margin-bottom:10px">Editar portes · wants actual</div>
+      <div style="font-size:18px;font-weight:700;margin-bottom:10px">Editar portes · ${mode}</div>
       <div style="font-size:12px;color:#666;margin-bottom:10px">
-        Wants cargado: ${wants.length} cartas · mostrando ${sellers.length} vendedores con al menos 1 coincidencia compatible.
-        Cambiar portes NO vuelve a analizar Cardmarket; solo actualiza el coste guardado.
+        ${sellers.length} vendedores · Los importes modificados se comparten entre Wants y Master Sets.
+        Guardar recalcula el plan de Master Sets con las ofertas ya encontradas.
       </div>
       <table style="width:100%;border-collapse:collapse">
         <thead>
@@ -3306,8 +3730,8 @@
             <th style="text-align:left;padding:6px 8px;border-bottom:2px solid #333">Vendedor</th>
             <th style="text-align:center;padding:6px 8px;border-bottom:2px solid #333">País</th>
             <th style="text-align:center;padding:6px 8px;border-bottom:2px solid #333">Estado</th>
-            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Cartas wants</th>
-            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Valor wants</th>
+            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Cartas / variantes</th>
+            <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Valor de cartas</th>
             <th style="text-align:right;padding:6px 8px;border-bottom:2px solid #333">Portes €</th>
           </tr>
         </thead>
@@ -3323,29 +3747,27 @@
     editor.querySelector("#cm-ship-cancel").onclick = () => editor.remove();
 
     editor.querySelector("#cm-ship-save").onclick = () => {
-      const updated = loadSellers();
-      let changed = 0;
-
-      editor.querySelectorAll(".cm-ship-input").forEach(inp => {
-        const seller = inp.dataset.seller;
-        let val = parseFloat(String(inp.value).replace(",", "."));
-        if (!Number.isFinite(val) || val < 0) val = 0;
-
-        if (updated[seller]) {
-          if (Number(updated[seller].shipping || 0) !== val) changed++;
-          updated[seller].shipping = val;
+      const changes=[];
+      for(const input of editor.querySelectorAll(".cm-ship-input")){
+        const raw=input.value.trim().replace(",",".");
+        const value=Number(raw);
+        if(raw===""||!Number.isFinite(value)||value<0){
+          input.setCustomValidity("Introduce unos portes de 0 € o más.");
+          input.reportValidity();
+          return;
         }
-      });
-
-      saveSellers(updated);
-      editor.remove();
-
-      // v5.4.18: refresh visible cart/plan shipping data immediately.
-      try { refreshCartPackUi(); } catch(e) {}
-
-      log.textContent = `Portes actualizados. Vendedores modificados: ${changed}\n\nPulsa "Plan inteligente" para recalcular el plan con los nuevos portes.`;
+        input.setCustomValidity("");
+        if(value!==Number(input.dataset.initial))changes.push({seller:input.dataset.seller,value});
+      }
+      try{
+        if(changes.length)saveShippingOverrides(changes);
+        editor.remove();
+        try{refreshCartPackUi()}catch{}
+        $("#cm-log").textContent="Portes guardados. Puedes recalcular el plan con estos importes.";
+      }catch(e){$("#cm-log").textContent="No se pudieron guardar los portes: "+e.message}
     };
-  };
+  }
+  window.CMHelperEditShipping=sellers=>openShippingEditor(sellers);
 
 
   let lastSmartPlan = null;

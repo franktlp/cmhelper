@@ -1,0 +1,57 @@
+{
+  "schema": 1,
+  "updated": "2026-11-09",
+  "sets": [
+    {
+      "id": "Mega Evolution",
+      "cardmarketSlugs": [
+        "Mega-Evolution"
+      ],
+      "tcgcollectorExpansion": "Mega Evolution",
+      "source": {
+        "kind": "pokecottage-xlsx",
+        "url": "https://pokecottagecdn.com/mastersets/downloads/PokeCottage-MEGA-EVOLUTION-Master-Set-Checklist.xlsx"
+      },
+      "counts": {
+        "master": 310,
+        "grand": 427
+      },
+      "status": "verified"
+    },
+    {
+      "id": "Destined Rivals",
+      "cardmarketSlugs": [
+        "Destined-Rivals"
+      ],
+      "tcgcollectorExpansion": "Destined Rivals",
+      "source": {
+        "kind": "pokecottage-xlsx",
+        "url": "https://pokecottagecdn.com/mastersets/downloads/PokeCottage-DESTINED-RIVALS-Master-Set-Checklist.xlsx"
+      },
+      "counts": {
+        "master": 409
+      },
+      "status": "verified"
+    },
+    {
+      "id": "Phantasmal Flames",
+      "cardmarketSlugs": [
+        "Phantasmal-Flames"
+      ],
+      "tcgcollectorExpansion": "Phantasmal Flames",
+      "counts": {
+        "master": 214
+      }
+    },
+    {
+      "id": "Scarlet & Violet 151",
+      "cardmarketSlugs": [
+        "151",
+        "Pokemon-151",
+        "Scarlet-Violet-151",
+        "Scarlet-and-Violet-151"
+      ],
+      "workbookName": "151"
+    }
+  ]
+}
