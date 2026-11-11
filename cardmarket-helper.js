@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "1.5.2";
+  const VERSION = "1.5.3";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -2032,9 +2032,11 @@
           if(special){
             // Validate both the explicit label and the composite URL identity.
             const compact=value=>value.toUpperCase().replace(/[^A-Z0-9]/g,"").replace(/\d+/g,d=>String(Number(d)));
-            const suffix=decodeURIComponent(product.pathname.split("-").pop());
+            const suffix=decodeURIComponent(product.pathname).match(/-(30C(?:[A-Z]+-?\d+|[BGR]RGB))$/i)?.[1];
+            if(!suffix)continue;
             if(compact(suffix)!==compact(printed[1]+printed[2]))continue;
-          }else if(!parsed||!expansionCodesEquivalent(parsed.expansion,printed[1]))continue;
+          }else if(!parsed||!expansionCodesEquivalent(parsed.expansion,printed[1])||
+            printed[1].toUpperCase()==="MEE"&&Number(parsed.number)!==Number(printed[2]))continue;
           const number=window.CMMasterData.marketNumberKey(printed[1],printed[2],denominator);
           if(!expected.has(number))continue;
           product.search="";product.hash="";
@@ -2066,7 +2068,7 @@
         const key=number+":"+want.variant;
         const paths=byNumber.get(number);
         onProgress?.("Buscando "+(checked+1)+"/"+missing.length+" · "+want.name+" · "+want.variant);
-        if(paths?.size!==1){
+        if(!paths?.size||paths.size!==1&&!number.startsWith("MEE:")){
           issues.push({...want,reason:paths?"Varias fichas coinciden":"Ficha exacta sin localizar para esta numeración"});
           checked++;
           continue;
@@ -2083,8 +2085,8 @@
         const reverseFilter=want.variant==="reverse"?"Y":ordinary&&hasReverse?"N":"";
         if(reverseFilter)product.searchParams.set("isReverseHolo",reverseFilter);
         let noOfferReason="Cardmarket no devolvió ofertas en la primera página";
-        const readOffers=async()=>{
-          const doc=await fetchDoc(product);
+        const readOffers=async(productURL=product)=>{
+          const doc=await fetchDoc(productURL);
           const rows=[...doc.querySelectorAll(".article-row")].map(row=>({
             row,finish:finishFromRow(row),id:extractMasterArticleId(row)
           }));
@@ -2094,7 +2096,7 @@
           // Some pages omit the selected filter in their HTML. Check whether
           // switching only the reverse filter separates the exact article IDs.
           if(reverseFilter&&!applied&&!patterned&&!rows.some(r=>r.finish)&&rows.some(r=>r.id)){
-            const opposite=new URL(product);
+            const opposite=new URL(productURL);
             opposite.searchParams.set("isReverseHolo",reverseFilter==="Y"?"N":"Y");
             const comparison=await fetchDoc(opposite);
             const ids=new Set([...comparison.querySelectorAll(".article-row")].map(extractMasterArticleId).filter(Boolean));
@@ -2119,19 +2121,27 @@
             const price=euro((row.querySelector(".price-container .fw-bold")||
               row.querySelector(".col-offer .fw-bold")||row.querySelector(".mobile-offer-container .fw-bold"))?.textContent);
             if(!seller||!Number.isFinite(price)||price<=0||price>cardMax)continue;
-            matches.push({...want,key,seller,price,price_eur:price,url:product.href,condition:state,
+            matches.push({...want,key,seller,price,price_eur:price,url:productURL.href,condition:state,
               article_id:id,country:detectCountryFromElement(row),language:offerLanguage});
           }
           return matches;
         };
         const verify=async offer=>{
-          const current=await readOffers();
+          const offerURL=new URL(offer.url);
+          const identity=new URL(offerURL);identity.search="";identity.hash="";
+          if(!paths.has(identity.href))return false;
+          const current=await readOffers(offerURL);
           return current.some(o=>o.article_id===offer.article_id&&o.seller===offer.seller&&
             o.price_eur===offer.price_eur&&o.condition===offer.condition);
         };
         let found=false;
         const restoredOffers=restore?.offers?.filter(o=>o.key===key)||[];
-        for(const offer of restore?restoredOffers:await readOffers()){
+        const candidates=[];
+        if(!restore)for(const path of paths){
+          const candidate=new URL(product);candidate.pathname=new URL(path).pathname;
+          candidates.push(...await readOffers(candidate));
+        }
+        for(const offer of restore?restoredOffers:candidates){
           const sellerKey=norm(offer.seller);
           const items=offers.get(sellerKey)||new Map();
           if(!items.has(key)||items.get(key).price>offer.price)items.set(key,{...offer,verify});
@@ -2245,7 +2255,7 @@
             cardCost,shipCost,total:cardCost+shipCost}:null};
       },
       snapshot:()=>({
-        mappingVersion:3,createdAt,listPath,missing,catalog,language,
+        mappingVersion:4,createdAt,listPath,missing,catalog,language,
         settings:{condition,cardMax:Number.isFinite(cardMax)?cardMax:null,countries},
         shipping:Object.fromEntries(results.map(s=>[norm(s.seller),s.shipping])),
         byNumber:[...byNumber].map(([n,paths])=>[n,[...paths]]),
