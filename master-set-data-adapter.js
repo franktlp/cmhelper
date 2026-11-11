@@ -16,6 +16,16 @@ function normalizeVariant(v){
   if(/^masterball(?:pattern|reverseholo|holo)?$/.test(key))return 'master ball';
   return ({normalholo:'holo',standard:'normal',nonholo:'normal',reverseholo:'reverse'})[key]||s;
 }
+function numberKey(value,denominator=null){
+  const text=String(value||'').trim().toUpperCase().replace(/\s+/g,'');
+  const numbered=/^(\d+)(?:\/(\d+))?$/.exec(text);
+  if(numbered){
+    if(!numbered[2]||denominator&&Number(numbered[2])===denominator)return String(Number(numbered[1]));
+    return Number(numbered[1])+'/'+Number(numbered[2]);
+  }
+  const code=/^(CC|MEE)0*(\d+)(?:\/(\d+))?$/.exec(text);
+  return code?code[1]+':'+Number(code[2])+(code[3]&&!(code[1]==='CC'&&Number(code[3])===30)?'/'+Number(code[3]):''):text;
+}
 const languages={Spanish:'es',English:'en',Japanese:'ja',French:'fr',German:'de',Italian:'it',Portuguese:'pt'};
 function decodeCollection(csv){const records=parseCSV(csv);if(!records.length||!['Expansion','Card number','Card variant','Card language','Quantity'].every(k=>k in records[0]))throw Error('El archivo no parece una exportación válida de TCGCollector');return records.map(r=>({set:r.Expansion,number:r['Card number'],name:r['Card name'],variant:normalizeVariant(r['Card variant']),language:languages[r['Card language']]||r['Card language'],quantity:Number(r.Quantity)||0})).filter(x=>x.set&&x.number&&x.quantity>0)}
 async function chooseCollectionFile(){if(!window.showOpenFilePicker)return {status:'file-picker-unavailable'};const [handle]=await window.showOpenFilePicker({multiple:false,types:[{description:'TCGCollector CSV',accept:{'text/csv':['.csv']}}]});if(!handle)return null;const file=await handle.getFile(),entries=decodeCollection(await file.text());await put(HANDLE,handle);await put(SNAPSHOT,{entries,filename:file.name,modified:file.lastModified,updatedAt:Date.now()});return {entries:entries.length,filename:file.name,modified:file.lastModified}}
@@ -29,18 +39,15 @@ async function progress(set,language,tier){
   const [snap,catalog]=await Promise.all([get(SNAPSHOT),getCatalog(set)]);
   if(!catalog)return {status:'catalog-missing'};
   const variants=catalog.entries.filter(x=>(x.language==='all'||x.language===language)&&(tier==='grand'||x.tier==='master'));
-  const denominators=new Set(catalog.entries.filter(x=>x.tier==='master').map(x=>Number(String(x.number).split('/')[1])));
+  const denominators=new Set(catalog.entries.filter(x=>x.tier==='master'&&/^\d+\/\d+$/.test(x.number)).map(x=>Number(String(x.number).split('/')[1])));
   const denominator=denominators.size===1?[...denominators][0]:null;
   function key(entry){
-    const number=String(entry.number).trim().toLowerCase();
-    const parts=/^(\d+)(?:\/(\d+))?$/.exec(number);
-    const normalized=denominator&&parts&&(!parts[2]||Number(parts[2])===denominator)?String(Number(parts[1])):number;
-    return normalized+'|'+normalizeVariant(entry.variant);
+    return numberKey(entry.number,denominator)+'|'+normalizeVariant(entry.variant);
   }
   const owned=new Set((snap?.entries||[]).filter(x=>x.language===language&&setKey(x.set)===setKey(set)).map(key));
   const rows=variants.map(x=>({...x,owned:x.tier==='grand'?false:owned.has(key(x)),matchStatus:x.tier==='grand'?'unverified-promo-mapping':'matched-by-number-and-foil'}));
   return {status:'ok',set,language,tier,total:rows.length,owned:rows.filter(x=>x.owned).length,unverified:rows.filter(x=>x.matchStatus==='unverified-promo-mapping').length,missing:rows.filter(x=>!x.owned),inventoryUpdatedAt:snap?.updatedAt||null,catalogUpdatedAt:catalog.updatedAt};
 }
-window.CMMasterData={setKey,normalizeVariant,chooseCollectionFile,importCollectionFile,refreshCollection,requestCollectionPermission,getSnapshot:()=>get(SNAPSHOT),storeVerifiedCatalog,getCatalog,progress,version:'0.2.0'};
+window.CMMasterData={numberKey,setKey,normalizeVariant,chooseCollectionFile,importCollectionFile,refreshCollection,requestCollectionPermission,getSnapshot:()=>get(SNAPSHOT),storeVerifiedCatalog,getCatalog,progress,version:'0.2.0'};
 console.info('Master Set data adapter ready (isolated prototype).');
 })();

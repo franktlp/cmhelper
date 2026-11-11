@@ -1912,7 +1912,10 @@
     const saved=new Map(Object.values(loadSellers()).map(s=>[norm(s.seller),s]));
     const countries=discoveryCountryCodes().map(code=>CARDMARKET_COUNTRY_IDS[code]);
     const delay=Math.max(1200,Number($("#cm-page-delay")?.value)||0);
-    const expected=new Set(missing.map(w=>normalizeNum(w.number)));
+    const mainNumber=catalog.find(x=>x.tier==="master"&&/^\d+\/\d+$/.test(x.number))?.number;
+    const denominator=Number(mainNumber?.split("/")[1])||null;
+    const masterNumber=value=>window.CMMasterData.numberKey(value,denominator);
+    const expected=new Set(missing.map(w=>masterNumber(w.number)));
     const byNumber=new Map();
     const offers=new Map(),cartOffers=new Map();
     const issues=[];
@@ -1983,9 +1986,9 @@
           // Printed number in Cardmarket's label takes precedence over the URL suffix.
           const parsed=productCodeNumberFromHref(product.href);
           const label=[link.textContent,link.title,link.querySelector("[title]")?.title].join(" ");
-          const printed=label.match(/\(\s*([A-Z][A-Z0-9]+)\s+(\d+)\s*\)/i);
+          const printed=label.match(/\(\s*([A-Z0-9]+)\s+(\d+)\s*\)/i);
           if(!printed||!parsed||!expansionCodesEquivalent(parsed.expansion,printed[1]))continue;
-          const number=normalizeNum(printed[2]);
+          const number=masterNumber(printed[2]);
           if(!expected.has(number))continue;
           product.search="";product.hash="";
           const paths=byNumber.get(number)||new Set();
@@ -1999,12 +2002,12 @@
 
       for(const want of missing){
         signal?.throwIfAborted();
-        const number=normalizeNum(want.number);
+        const number=masterNumber(want.number);
         const key=number+":"+want.variant;
         const paths=byNumber.get(number);
         onProgress?.("Buscando "+(checked+1)+"/"+missing.length+" · "+want.name+" · "+want.variant);
         if(paths?.size!==1){
-          issues.push({...want,reason:paths?"Varias fichas coinciden":"Ficha exacta sin localizar"});
+          issues.push({...want,reason:paths?"Varias fichas coinciden":"Ficha exacta sin localizar para esta numeración"});
           checked++;
           continue;
         }
@@ -2012,7 +2015,7 @@
         product.searchParams.set("language",languageId);
         product.searchParams.set("minCondition",String(maxCondition));
         if(countries.length)product.searchParams.set("sellerCountry",countries.join(","));
-        const sameCard=catalog.filter(x=>x.tier==="master"&&normalizeNum(x.number)===number);
+        const sameCard=catalog.filter(x=>x.tier==="master"&&masterNumber(x.number)===number);
         const patterned=sameCard.some(x=>x.variant==="poké ball"||x.variant==="master ball");
         const hasReverse=sameCard.some(x=>x.variant==="reverse");
         const pattern=want.variant==="poké ball"||want.variant==="master ball";
@@ -2105,7 +2108,7 @@
       analyze:async()=>{
         const available=planSellers.map(s=>({...s,offers:s.offers.filter(o=>
           !masterCartAttempts.has(cartKey(o))&&!staleIds.has(o.article_id))})).filter(s=>s.offers.length);
-        const analysis=available.length?await buildSmartPlan(missing.map(w=>({...w,language})),available):
+        const analysis=available.length?await buildSmartPlan(missing.map(w=>({...w,language,key:masterNumber(w.number)+":"+w.variant})),available):
           {best:null,valued:{},valuationRows:[],cartMaxPrice:getCartMaxPrice()};
         const {best,valuationRows,cartMaxPrice}=analysis;
         const evaluations=new Map(valuationRows.map(v=>[JSON.stringify([v.seller,v.key]),v]));
@@ -3212,7 +3215,7 @@
     const marketDelay = Math.max(1200, parseInt($("#cm-market-delay").value || "4000",10));
     const cartMaxPrice = getCartMaxPrice();
 
-    const planKey=masterSellers?o=>normalizeNum(o.number)+":"+o.variant:cardKey;
+    const planKey=masterSellers?o=>o.key:cardKey;
     const observations=masterSellers?Object.create(null):allObservedOffers();
     if(masterSellers)for(const seller of sellers){
       for(const offer of seller.offers){

@@ -28,34 +28,47 @@ function parseWorkbook(arrayBuffer,XLSX,options={}){
     const foilIndex=idx([/^(foil|finish|variant)$/]);
     const rarityIndex=idx([/^rarity$/]);
     let lastRow=rows.length;
+    let selectedRows=null;
     if(dynamic){
       // The workbook's Master counter identifies the main numbered section.
       const masterColumn=header.indexOf('master set');
       const ownedColumn=header.indexOf('owned');
       if(masterColumn<0||ownedColumn<0)continue;
       const formula=sheet[XLSX.utils.encode_cell({r:headerIndex,c:masterColumn+1})]?.f;
-      const range=/COUNTIF\(\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+),/.exec(formula||'');
+      const ranges=[...String(formula||'').matchAll(/COUNTIF\(\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+),/g)];
       const owned=XLSX.utils.encode_col(ownedColumn);
-      if(!range||range[1]!==owned||range[3]!==owned||Number(range[2])!==headerIndex+2)continue;
-      lastRow=Number(range[4]);
-      if(lastRow>rows.length||lastRow<=headerIndex+1)continue;
+      if(!ranges.length||ranges.some(r=>r[1]!==owned||r[3]!==owned))continue;
+      selectedRows=new Set();
+      const masterRanges=setKey(options.workbookName)==='30thcelebration'?ranges:ranges.slice(0,1);
+      for(const range of masterRanges){
+        const start=Number(range[2])-1,end=Number(range[4]);
+        if(start<headerIndex+1||end>rows.length||start>=end)throw Error('Intervalo Master inválido en el Excel');
+        for(let index=start;index<end;index++)selectedRows.add(index);
+      }
+      if(Math.min(...selectedRows)!==headerIndex+1)continue;
+      lastRow=Math.max(...selectedRows)+1;
     }
     let tier='master',entries=[];
-    for(const row of rows.slice(headerIndex+1,lastRow)){
+    for(let rowIndex=headerIndex+1;rowIndex<lastRow;rowIndex++){
+      if(selectedRows&&!selectedRows.has(rowIndex))continue;
+      const row=rows[rowIndex];
       const all=row.map(clean).join(' ');
       if(/promos\s*(?:&|and)\s*variants|optional\s*promos/i.test(all)){tier='grand';continue}
       const number=clean(row[numberIndex]),name=clean(row[nameIndex]),foil=clean(row[foilIndex]),rarity=rarityIndex>=0?clean(row[rarityIndex]):'';
       const numbered=Number.isFinite(Number(number.split('/')[0]))&&Number(number.split('/')[0])>=1;
+      const special=dynamic&&setKey(options.workbookName)==='30thcelebration'&&
+        (/^CC \d{3}\/030$/.test(number)||/^[BGR]\/RGB$/.test(number)||/^MEE \d{3}$/.test(number));
       const promo=tier==='grand'&&set==='Mega Evolution'&&/^MEP \d{3}$/.test(number);
-      if(!number||!name||(!numbered&&!promo))continue;
+      if(!number||!name||(!numbered&&!promo&&!special))continue;
       const language=/Brazilian Portuguese/i.test(rarity)?'pt':'all';
       const variant=tier==='master'?(window.CMMasterData?.normalizeVariant(foil)||({'standard':'normal','reverse holo':'reverse'}[foil.toLowerCase()]||foil.toLowerCase())):rarity||foil;
       if(!variant)continue;
       entries.push({set,number,name,variant,tier,language,rarity,foil,detail:tier==='grand'?rarity:'',source:'pokecottage'});
     }
     if(dynamic){
-      if(entries.length!==lastRow-headerIndex-1)throw Error('La sección Master del Excel contiene filas incompletas');
-      validateNumberedMaster(entries);
+      if(entries.length!==selectedRows.size)throw Error('La sección Master del Excel contiene filas incompletas');
+      if(setKey(options.workbookName)==='30thcelebration')validateCelebrationMaster(entries);
+      else validateNumberedMaster(entries);
     }
     if(entries.length)candidates.push({sheetName,entries});
   }
@@ -69,6 +82,26 @@ function parseWorkbook(arrayBuffer,XLSX,options={}){
   if(options.expectedGrand!=null&&grand!==options.expectedGrand)throw Error('Catálogo Grand incompleto: '+grand+' filas, se esperaban '+options.expectedGrand);
   if(!master)throw Error('La checklist no contiene entradas Master');
   return {entries,counts:{master,grand,optional:grand-master},sheetName,source:options.url||SOURCE,parsedAt:new Date().toISOString(),verified:dynamic||options.expectedMaster!=null&&(options.masterOnly||options.expectedGrand!=null)};
+}
+function validateCelebrationMaster(entries){
+  const main=entries.filter(x=>/^\d{3}\/128$/.test(x.number));
+  validateNumberedMaster(main);
+  const seen=new Set();
+  const classic=new Set(),rgb=new Set(),energy=new Set();
+  for(const entry of entries){
+    if(entry.tier!=='master'||entry.variant!=='holo'||seen.has(entry.number))throw Error('Variante 30th Celebration inválida o duplicada: '+entry.number);
+    seen.add(entry.number);
+    const cc=/^CC (\d{3})\/030$/.exec(entry.number);
+    const mee=/^MEE (\d{3})$/.exec(entry.number);
+    if(cc)classic.add(Number(cc[1]));
+    else if(/^[BGR]\/RGB$/.test(entry.number))rgb.add(entry.number);
+    else if(mee)energy.add(Number(mee[1]));
+    else if(!/^\d{3}\/128$/.test(entry.number))throw Error('Numeración 30th Celebration desconocida: '+entry.number);
+  }
+  if(main.length!==158||classic.size!==30||[...classic].some(n=>n<1||n>30)||rgb.size!==3||
+     energy.size!==12||![2,4,5,7,9,10,11,12,13,14,15,16].every(n=>energy.has(n))){
+    throw Error('Las secciones Master de 30th Celebration están incompletas');
+  }
 }
 function validateNumberedMaster(entries){
   const groups=new Map(),denominators=new Set();
@@ -132,5 +165,5 @@ async function fetchAndParse(XLSX,{id:set,source,counts={},workbookName}){
     masterOnly:counts.grand==null
   });
 }
-window.CMPokeCottageXLSX={source:SOURCE,parseWorkbook,fetchAndParse,version:'0.4.0'};
+window.CMPokeCottageXLSX={source:SOURCE,parseWorkbook,fetchAndParse,version:'0.4.1'};
 })();
