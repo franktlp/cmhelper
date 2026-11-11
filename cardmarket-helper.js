@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "1.5.3";
+  const VERSION = "1.5.4";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -3731,15 +3731,16 @@
       padding:16px;font:14px Arial,sans-serif
     `;
 
+    const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const rows = sellers.map(s => `
       <tr>
-        <td style="padding:6px 8px;border-bottom:1px solid #ddd">${s.seller}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:center">${s.country || "??"}</td>
-        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:center">${s.status || "COMPLETE"}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #ddd">${escape(s.seller)}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:center">${escape(s.country || "??")}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:center">${escape(s.status || "COMPLETE")}</td>
         <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">${s.wantsCount}</td>
         <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">${fmt(s.wantsValue)}</td>
         <td style="padding:6px 8px;border-bottom:1px solid #ddd;text-align:right">
-          <input data-seller="${s.seller.replace(/"/g,'&quot;')}" class="cm-ship-input"
+          <input data-seller="${escape(s.seller)}" class="cm-ship-input"
             value="${shippingFor(s.seller,s.shipping).toFixed(2)}" data-initial="${shippingFor(s.seller,s.shipping).toFixed(2)}"
             style="width:80px;padding:4px;text-align:right"> €
         </td>
@@ -3752,6 +3753,23 @@
         ${sellers.length} vendedores · Los importes modificados se comparten entre Wants y Master Sets.
         Guardar recalcula el plan de Master Sets con las ofertas ya encontradas.
       </div>
+      <div style="display:flex;gap:10px;align-items:end;flex-wrap:wrap;margin-bottom:10px">
+        <label style="flex:1;min-width:180px">Buscar vendedor<br>
+          <input id="cm-ship-search" type="search" placeholder="Nombre del vendedor…" style="box-sizing:border-box;width:100%;padding:6px">
+        </label>
+        <label>País<br><select id="cm-ship-country" style="padding:6px"><option value="">Todos</option></select></label>
+        <label>Ordenar por<br><select id="cm-ship-sort" style="padding:6px">
+          <option value="coverage">Más cartas / variantes</option>
+          <option value="name">Vendedor A–Z</option>
+          <option value="shipping-asc">Portes: menor a mayor</option>
+          <option value="shipping-desc">Portes: mayor a menor</option>
+          <option value="country">País</option>
+        </select></label>
+        <label style="padding-bottom:6px"><input id="cm-ship-edited" type="checkbox"> Solo cambios sin guardar</label>
+        <button id="cm-ship-clear" type="button" style="padding:6px">Limpiar filtros</button>
+      </div>
+      <div id="cm-ship-count" role="status" aria-live="polite" style="font-size:12px;margin-bottom:8px"></div>
+      <div id="cm-ship-empty" hidden>No hay vendedores que coincidan con los filtros.</div>
       <table style="width:100%;border-collapse:collapse">
         <thead>
           <tr>
@@ -3772,6 +3790,55 @@
     `;
     document.body.appendChild(editor);
 
+    const search=editor.querySelector("#cm-ship-search"),country=editor.querySelector("#cm-ship-country");
+    const order=editor.querySelector("#cm-ship-sort"),edited=editor.querySelector("#cm-ship-edited");
+    const tbody=editor.querySelector("tbody");
+    const records=[...tbody.rows].map((row,index)=>({row,seller:sellers[index],input:row.querySelector(".cm-ship-input")}));
+    const text=value=>norm(value).normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+    const compare=(a,b)=>String(a).localeCompare(String(b),'es',{sensitivity:'base',numeric:true});
+    const shipping=record=>{
+      const raw=record.input.value.trim().replace(',','.');
+      const value=Number(raw);
+      return raw!==''&&Number.isFinite(value)&&value>=0?value:null;
+    };
+    const changed=record=>shipping(record)!==Number(record.input.dataset.initial);
+    for(const value of [...new Set(sellers.map(s=>s.country||'??'))].sort(compare)){
+      const option=document.createElement('option');option.value=value;option.textContent=value;country.append(option);
+    }
+    function filterRows(){
+      const query=text(search.value);
+      let visible=0;
+      records.sort((a,b)=>{
+        let difference=0;
+        if(order.value==='coverage')difference=(Number(b.seller.wantsCount)||0)-(Number(a.seller.wantsCount)||0);
+        if(order.value==='country')difference=compare(a.seller.country||'??',b.seller.country||'??');
+        if(order.value.startsWith('shipping-')){
+          const left=shipping(a),right=shipping(b);
+          difference=left===null?(right===null?0:1):right===null?-1:
+            order.value==='shipping-desc'?right-left:left-right;
+        }
+        return difference||compare(a.seller.seller,b.seller.seller);
+      });
+      for(const record of records){
+        record.row.hidden=!(text(record.seller.seller).includes(query)&&
+          (!country.value||(record.seller.country||'??')===country.value)&&(!edited.checked||changed(record)));
+        if(!record.row.hidden)visible++;
+        // Move the existing nodes: edits survive sorting and hiding rows.
+        tbody.append(record.row);
+      }
+      editor.querySelector('#cm-ship-count').textContent=visible+' de '+records.length+' vendedores · '+records.filter(changed).length+' modificados';
+      editor.querySelector('#cm-ship-empty').hidden=visible!==0;
+    }
+    search.oninput=filterRows;country.onchange=filterRows;order.onchange=filterRows;edited.onchange=filterRows;
+    for(const record of records)record.input.addEventListener('input',()=>{
+      record.input.setCustomValidity('');
+      // Keep focus while typing; apply live order/visibility after leaving the input.
+      editor.querySelector('#cm-ship-count').textContent=records.filter(r=>!r.row.hidden).length+' de '+records.length+' vendedores · '+records.filter(changed).length+' modificados';
+    });
+    for(const record of records)record.input.addEventListener('change',filterRows);
+    editor.querySelector('#cm-ship-clear').onclick=()=>{search.value='';country.value='';edited.checked=false;filterRows();search.focus()};
+    filterRows();search.focus();
+
     editor.querySelector("#cm-ship-cancel").onclick = () => editor.remove();
 
     editor.querySelector("#cm-ship-save").onclick = () => {
@@ -3780,6 +3847,8 @@
         const raw=input.value.trim().replace(",",".");
         const value=Number(raw);
         if(raw===""||!Number.isFinite(value)||value<0){
+          search.value='';country.value='';edited.checked=false;filterRows();
+          input.focus();
           input.setCustomValidity("Introduce unos portes de 0 € o más.");
           input.reportValidity();
           return;
