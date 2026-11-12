@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cardmarket Helper Loader
 // @namespace    https://github.com/franktlp/cmhelper
-// @version      1.5.6
+// @version      1.5.7
 // @description  Cardmarket Helper con Wants, Master Sets, portes compartidos y planes persistentes
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
@@ -21,7 +21,7 @@
   const workbookURL=/^https:\/\/pokecottagecdn\.com\/mastersets\/downloads\/PokeCottage-[A-Z0-9]+(?:-[A-Z0-9]+)*-Master-Set-Checklist\.xlsx$/;
   const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
   if(page.__cmHelperLoaderActive)return;
-  page.__cmHelperLoaderActive='1.5.6';
+  page.__cmHelperLoaderActive='1.5.7';
   page.__cmMasterFetchPokeCottage=url=>new Promise((resolve,reject)=>{
     if(typeof GM_xmlhttpRequest!=='function'){reject(new Error('Permiso GM_xmlhttpRequest no disponible en Tampermonkey'));return}
     if(typeof url!=='string'||url.length>220||!workbookURL.test(url)){reject(new Error('Checklist de PokéCottage no autorizada'));return}
@@ -40,7 +40,7 @@
   });
   const BASE='https://raw.githubusercontent.com/franktlp/cmhelper/main/';
   // Load all modules from the same verified release.
-  const RELEASE='0bcd6b5e33c12d88f3cf5f819a80dfa425ef037f';
+  const RELEASE='a2457929f52dfcfe8a81145d2560ceb969222423';
   const PINNED={
     'cardmarket-helper.js':RELEASE,
     'cardmarket-id-catalog.js':RELEASE,
