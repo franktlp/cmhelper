@@ -1,4 +1,4 @@
-/* Master Set Manager UI 1.5.5 — integrated with Cardmarket Helper.
+/* Master Set Manager UI 1.5.6 — integrated with Cardmarket Helper.
  * Requires CMMasterData, CMPokeCottageXLSX and the Helper search/cart module.
  */
 (()=>{'use strict';
@@ -59,7 +59,7 @@ const detached=new MutationObserver(()=>{
 });
 detached.observe(document.body,{childList:true,subtree:true});
 const head=el('div');head.style='margin:8px 0;font-size:12px;color:#666';
-head.append(el('span',{},'Master Sets · 1.5.5'));p.append(head);
+head.append(el('span',{},'Master Sets · 1.5.6'));p.append(head);
 const context=el('div');context.style='margin:10px 0;padding:8px;background:#f1f3f5;border-radius:6px;font-size:13px';p.append(context);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
 const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');const search=el('button',{type:'button',disabled:true},'Buscar faltantes en Cardmarket');actions.append(choose,catalog,search);p.append(actions);
@@ -176,6 +176,29 @@ async function showResponse(response,missing,config,restored){
     const analyze=el('button',{type:'button',disabled:!response.covered},'Análisis inteligente');
     const plan=el('div');
     market.append(analyze,shipping,plan);
+    const cartStatus=el('p');
+    const recoverCart=el('button',{type:'button'},'He vaciado el carrito: recuperar variantes');
+    recoverCart.id='cm-master-recover-cart';
+    const updateCartStatus=()=>{
+      const count=response.cartProcessedCount;
+      cartStatus.textContent=count?count+' variantes marcadas como añadidas al carrito anteriormente. Añadirlas no las marca como compradas.':'';
+      cartStatus.hidden=recoverCart.hidden=!count;
+    };
+    market.insertBefore(cartStatus,plan);market.insertBefore(recoverCart,plan);
+    updateCartStatus();
+    recoverCart.onclick=async()=>{
+      if(searchController)return;
+      if(!confirm('¿Has retirado del carrito las cartas de esta colección e idioma? Volverán a incluirse en el análisis. Este botón no vacía el carrito de Cardmarket.'))return;
+      recoverCart.disabled=search.disabled=analyze.disabled=shipping.disabled=true;
+      try{
+        await response.resetCartProgress();
+        data.scan=response.snapshot();data.analysis=null;data.feedback=null;data.selectedSeller=null;
+        await persistSession(config,data);
+        await showResponse(response,missing,config,{...data,recalculate:true});
+      }catch(e){setMsg('No se pudieron recuperar las variantes: '+e.message)}
+      finally{recoverCart.disabled=search.disabled=analyze.disabled=shipping.disabled=false;updateCartStatus()}
+    };
+
     refreshShippingView=async()=>{
       response.refreshShipping();
       data.scan=response.snapshot();
@@ -244,7 +267,7 @@ async function showResponse(response,missing,config,restored){
           const pack=packs.get(seller);
           const total=pack.reduce((sum,o)=>sum+o.price_eur,0);
           if(!confirm('¿Añadir al carrito '+pack.length+' variantes de '+seller+' por '+amount(total)+' en cartas?'))return;
-          cart.disabled=sellers.disabled=search.disabled=analyze.disabled=shipping.disabled=true;
+          cart.disabled=sellers.disabled=search.disabled=analyze.disabled=shipping.disabled=recoverCart.disabled=true;
           feedback.textContent='Verificando precios y añadiendo las ofertas exactas…';
           try{
             const result=await response.addPack(pack);
@@ -256,7 +279,7 @@ async function showResponse(response,missing,config,restored){
               (result.stopped?' · '+result.stopped:'')+
               (result.skipped?' · Las omitidas ya no coincidían con la oferta revisada o estaban agotadas.':'');
           }catch(e){feedback.textContent='Error: '+e.message}
-          finally{sellers.disabled=search.disabled=analyze.disabled=shipping.disabled=false;showPack()}
+          finally{sellers.disabled=search.disabled=analyze.disabled=shipping.disabled=recoverCart.disabled=false;updateCartStatus();showPack()}
         };
       }catch(e){plan.textContent='Error: '+e.message}
       finally{analyze.disabled=false}
@@ -374,7 +397,7 @@ function installTabs(){
   return true;
 }
 function activateMaster(){if(installTabs())showMode?.('master')}
-window.CMMasterUI={mount:activateMaster,updateCatalog,version:'1.5.5'};
+window.CMMasterUI={mount:activateMaster,updateCatalog,version:'1.5.6'};
 if(!installTabs()){
   const observer=new MutationObserver(()=>{
     if(installTabs())observer.disconnect();

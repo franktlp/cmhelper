@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "1.5.5";
+  const VERSION = "1.5.6";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -1964,6 +1964,23 @@
     const offers=new Map(),cartOffers=new Map();
     const issues=[];
     const cartKey=o=>[o.set,o.language,o.key].join("|");
+    const contextSets=new Set(missing.map(o=>window.CMMasterData.setKey(o.set)));
+    const contextVariants=new Set(catalog.map(o=>masterNumber(o.number)+':'+o.variant));
+    function belongsToCartContext(key){
+      const parts=key.split('|');
+      return parts.length===3&&contextSets.has(window.CMMasterData.setKey(parts[0]))&&
+        languageMatchesWant(parts[1],language)&&contextVariants.has(parts[2]);
+    }
+    async function resetCartProgress(){
+      if(masterCartBusy)throw Error("Espera a que termine el lote antes de recuperar las variantes.");
+      const attempts=readMasterAttempts();
+      let cleared=0;
+      for(const key of Object.keys(attempts))if(belongsToCartContext(key)){delete attempts[key];cleared++}
+      localStorage.setItem(MASTER_ATTEMPTS,JSON.stringify(attempts));
+      refreshShipping();
+      return cleared;
+    }
+
     let checked=0, stopped=restore?.stopped||"";
     const createdAt=restore?.createdAt||Date.now();
     const nextLink='a[rel="next"], a[aria-label="Siguiente página"], a[aria-label="Next page"]';
@@ -2214,7 +2231,7 @@
               if(v)detail="Oferta alternativa del mismo vendedor con ID: "+fmt(v.price_eur)+
                 (selected?.seller===o.seller?" · incluida en el plan":" · no incluida en el plan");
             }
-            else if(hasMasterAttempt(cartKey(o)))status="Ya procesada para el carrito";
+            else if(hasMasterAttempt(cartKey(o)))status="Añadida al carrito anteriormente";
             else if(staleIds.has(o.article_id))status="Oferta desactualizada";
             else if(!v)status="Oferta sin valorar";
             else if(["OUTLIER","EXPENSIVE"].includes(v.verdict)){
@@ -2252,7 +2269,7 @@
         const shipCost=planSellers.filter(s=>sellerUse[s.seller]).reduce((sum,s)=>sum+s.shipping,0);
         const diagnostics=saved.diagnostics?.map(seller=>({...seller,rows:seller.rows.map(row=>{
           const original=planSellers.find(s=>s.seller===seller.seller)?.offers.find(o=>o.key===row.key);
-          return original&&hasMasterAttempt(cartKey(original))?{...row,status:"Ya procesada para el carrito",detail:""}:row;
+          return original&&hasMasterAttempt(cartKey(original))?{...row,status:"Añadida al carrito anteriormente",detail:""}:row;
         })}))||[];
         return {...saved,diagnostics,processedAll:!!saved.best?.coverage&&!Object.keys(selected).length,best:Object.keys(selected).length?
           {...saved.best,coverage:Object.keys(selected).length,selected,sellerUse,chosen:Object.keys(sellerUse),
@@ -2266,6 +2283,8 @@
         offers:[...offers.values(),...cartOffers.values()].flatMap(items=>[...items.values()]).map(({verify,...o})=>o),
         issues,stopped,checked,staleIds:[...staleIds]
       }),
+      get cartProcessedCount(){return Object.keys(readMasterAttempts()).filter(belongsToCartContext).length},
+      resetCartProgress:()=>navigator.locks?navigator.locks.request("cm-master-cart",resetCartProgress):resetCartProgress(),
       addPack:pack=>navigator.locks?navigator.locks.request("cm-master-cart",()=>addPack(pack)):addPack(pack),
       get covered(){return new Set(results.flatMap(s=>s.items.map(o=>o.key))).size}};
     async function addPack(pack){
