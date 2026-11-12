@@ -1,4 +1,4 @@
-/* Master Set Manager UI 1.5.6 — integrated with Cardmarket Helper.
+/* Master Set Manager UI 1.5.7 — integrated with Cardmarket Helper.
  * Requires CMMasterData, CMPokeCottageXLSX and the Helper search/cart module.
  */
 (()=>{'use strict';
@@ -59,7 +59,7 @@ const detached=new MutationObserver(()=>{
 });
 detached.observe(document.body,{childList:true,subtree:true});
 const head=el('div');head.style='margin:8px 0;font-size:12px;color:#666';
-head.append(el('span',{},'Master Sets · 1.5.6'));p.append(head);
+head.append(el('span',{},'Master Sets · 1.5.7'));p.append(head);
 const context=el('div');context.style='margin:10px 0;padding:8px;background:#f1f3f5;border-radius:6px;font-size:13px';p.append(context);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
 const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');const search=el('button',{type:'button',disabled:true},'Buscar faltantes en Cardmarket');actions.append(choose,catalog,search);p.append(actions);
@@ -122,6 +122,14 @@ async function render(){
   }
 }
 async function action(fn){try{search.disabled=true;setMsg('Procesando…');const response=await fn();setMsg(typeof response==='string'?response:JSON.stringify(response));await render();}catch(e){setMsg('Error: '+e.message);console.error('Master Set Manager',e)}}
+window.addEventListener('cm-helper-budget-changed',async()=>{
+  const button=document.getElementById('cm-apply-budget');
+  if(searchController||!p.isConnected||!refreshShippingView||button?.disabled)return;
+  if(button)button.disabled=true;
+  try{await refreshShippingView()}
+  catch(e){setMsg('No se pudo aplicar el presupuesto: '+e.message)}
+  finally{if(button)button.disabled=false}
+},{signal:lifecycle.signal});
 window.addEventListener('cm-helper-shipping-changed',()=>{
   if(!searchController&&p.isConnected&&refreshShippingView){
     refreshShippingView().catch(e=>setMsg('No se pudo recalcular con los portes: '+e.message));
@@ -224,6 +232,7 @@ async function showResponse(response,missing,config,restored){
           if(!report)continue;
           const counts=new Map();
           for(const row of rows)counts.set(row.status,(counts.get(row.status)||0)+1);
+          report.rows=new Map(rows.map(row=>[row.key,row]));
           report.summary.textContent='Análisis · '+[...counts].map(([reason,count])=>count+' '+reason.toLowerCase()).join(' · ');
           for(const row of rows){
             const label=report.items.get(row.key);
@@ -290,17 +299,24 @@ async function showResponse(response,missing,config,restored){
         amount(seller.total-seller.shipping)+' + '+amount(seller.shipping)+' = '+amount(seller.total)));
       const explanation=el('p',{},'Ejecuta el análisis inteligente para ver por qué se incluyó o descartó cada variante.');
       details.append(explanation);
-      const report={summary:explanation,items:new Map()};
+      const report={summary:explanation,items:new Map(),rows:new Map()};
       sellerDiagnostics.set(seller.seller,report);
-      for(const item of seller.items){
+      const contents=el('div');details.append(contents);
+      details.ontoggle=()=>{
+        contents.replaceChildren();report.items.clear();
+        if(!details.open)return;
+        for(const item of seller.items){
         const line=el('div');
         line.append(el('a',{href:item.url,target:'_blank',rel:'noopener noreferrer'},
           item.number+' · '+item.name+' · '+item.variant+' · '+item.condition+' · '+amount(item.price)));
         const reason=el('span');
         line.append(reason);
+        const diagnostic=report.rows.get(item.key);
+        if(diagnostic)reason.textContent=' — '+diagnostic.status+(diagnostic.detail?' · '+diagnostic.detail:'');
         report.items.set(item.key,reason);
-        details.append(line);
-      }
+        contents.append(line);
+        }
+      };
       market.append(details);
     }
     if(response.issues.length){
@@ -357,6 +373,16 @@ function installTabs(){
     const label=wants.querySelector('#'+id)?.closest('label');
     if(label)shared.append(label);
   }
+  const applyBudget=el('button',{id:'cm-apply-budget',type:'button'},'Aplicar presupuesto');
+  const budgetStatus=el('span',{id:'cm-budget-status','aria-live':'polite'});
+  const budgetInput=shared.querySelector('#cm-cart-max-price');
+  budgetInput?.addEventListener('input',()=>{budgetStatus.textContent='Presupuesto pendiente de aplicar'});
+  applyBudget.onclick=()=>{
+    if(budgetInput&&!budgetInput.checkValidity()){budgetInput.reportValidity();return}
+    budgetStatus.textContent='';
+    window.dispatchEvent(new CustomEvent('cm-helper-budget-changed'));
+  };
+  shared.append(applyBudget,budgetStatus);
   const settings=el('details',{id:'cm-shared-options'});
   settings.append(el('summary',{},'Países, pausas y valoración'));
   const extras=el('div');
@@ -377,6 +403,7 @@ function installTabs(){
     save();
     wants.hidden=master;
     host.hidden=!master;
+    applyBudget.hidden=budgetStatus.hidden=!master;
     for(const [tab,active] of [[wantsTab,!master],[masterTab,master]]){
       tab.setAttribute('aria-selected',String(active));
       tab.tabIndex=active?0:-1;
@@ -397,7 +424,7 @@ function installTabs(){
   return true;
 }
 function activateMaster(){if(installTabs())showMode?.('master')}
-window.CMMasterUI={mount:activateMaster,updateCatalog,version:'1.5.6'};
+window.CMMasterUI={mount:activateMaster,updateCatalog,version:'1.5.7'};
 if(!installTabs()){
   const observer=new MutationObserver(()=>{
     if(installTabs())observer.disconnect();

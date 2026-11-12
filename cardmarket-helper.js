@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "1.5.6";
+  const VERSION = "1.5.7";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -1927,7 +1927,7 @@
     const saved=JSON.parse(localStorage.getItem(MASTER_ATTEMPTS)||"{}");
     return Object.fromEntries(Object.entries(saved).filter(([,time])=>Number.isFinite(time)&&Date.now()-time<ATTEMPT_TTL));
   }
-  function hasMasterAttempt(key){return Object.hasOwn(readMasterAttempts(),key)}
+  function hasMasterAttempt(key,attempts=readMasterAttempts()){return Object.hasOwn(attempts,key)}
   function markMasterAttempt(key){
     localStorage.setItem(MASTER_ATTEMPTS,JSON.stringify({...readMasterAttempts(),[key]:Date.now()}));
   }
@@ -1951,7 +1951,6 @@
     const perCard=String($("#cm-card-max-price")?.value||"").trim().replace(",",".");
     const cardMax=restore?.settings?(restore.settings.cardMax??Infinity):perCard===""?Infinity:Number(perCard);
     if(Number.isNaN(cardMax)||cardMax<0) throw Error("El máximo por carta no es válido.");
-    const budget=getCartMaxPrice();
     const defaultShipping=Math.max(0,Number(($("#cm-default-ship")?.value||"0").replace(",","."))||0);
     const saved=new Map(Object.values(loadSellers()).map(s=>[norm(s.seller),s]));
     const countries=restore?.settings?.countries||discoveryCountryCodes().map(code=>CARDMARKET_COUNTRY_IDS[code]);
@@ -2181,11 +2180,13 @@
     const results=[],planSellers=[];
     const staleIds=new Set(restore?.staleIds||[]);
     function refreshShipping(){
+      const budget=getCartMaxPrice();
+      const attempts=readMasterAttempts();
       const overrides=loadShippingOverrides();
       results.length=0;planSellers.length=0;
     for(const [sellerKey,items] of offers){
       const shipping=shippingFor([...items.values()][0].seller,restore?.shipping?.[sellerKey]??saved.get(sellerKey)?.shipping??defaultShipping,overrides);
-      const eligible=[...(cartOffers.get(sellerKey)?.values()||[])].filter(o=>!hasMasterAttempt(cartKey(o)));
+      const eligible=[...(cartOffers.get(sellerKey)?.values()||[])].filter(o=>!hasMasterAttempt(cartKey(o),attempts));
       if(eligible.length)planSellers.push({seller:eligible[0].seller,shipping,
         country:saved.get(sellerKey)?.country||eligible.find(o=>o.country)?.country||"",offers:eligible});
       const selected=[];
@@ -2213,9 +2214,11 @@
         wantsCount:items.size,wantsValue:[...items.values()].reduce((sum,o)=>sum+o.price_eur,0)
       }))},
       analyze:async()=>{
+        await sleep(0);
         refreshShipping();
+        const attempts=readMasterAttempts();
         const available=planSellers.map(s=>({...s,offers:s.offers.filter(o=>
-          !hasMasterAttempt(cartKey(o))&&!staleIds.has(o.article_id))})).filter(s=>s.offers.length);
+          !hasMasterAttempt(cartKey(o),attempts)&&!staleIds.has(o.article_id))})).filter(s=>s.offers.length);
         const analysis=available.length?await buildSmartPlan(missing.map(w=>({...w,language,key:masterNumber(w.number)+":"+w.variant})),available):
           {best:null,valued:{},valuationRows:[],cartMaxPrice:getCartMaxPrice()};
         const {best,valuationRows,cartMaxPrice}=analysis;
@@ -2231,7 +2234,7 @@
               if(v)detail="Oferta alternativa del mismo vendedor con ID: "+fmt(v.price_eur)+
                 (selected?.seller===o.seller?" · incluida en el plan":" · no incluida en el plan");
             }
-            else if(hasMasterAttempt(cartKey(o)))status="Añadida al carrito anteriormente";
+            else if(hasMasterAttempt(cartKey(o),attempts))status="Añadida al carrito anteriormente";
             else if(staleIds.has(o.article_id))status="Oferta desactualizada";
             else if(!v)status="Oferta sin valorar";
             else if(["OUTLIER","EXPENSIVE"].includes(v.verdict)){
@@ -2254,11 +2257,12 @@
       },
       restoreAnalysis:saved=>{
         if(!saved)return null;
+        const attempts=readMasterAttempts();
         const selected={};
         for(const [key,offer] of Object.entries(saved.best?.selected||{})){
           const original=planSellers.find(s=>s.seller===offer.seller)?.offers.find(o=>
             o.key===key&&o.article_id===offer.article_id&&o.price_eur===offer.price_eur);
-          if(original&&!hasMasterAttempt(cartKey(original)))selected[key]={...offer,original};
+          if(original&&!hasMasterAttempt(cartKey(original),attempts))selected[key]={...offer,original};
         }
         const sellerUse={};
         for(const offer of Object.values(selected)){
@@ -2269,7 +2273,7 @@
         const shipCost=planSellers.filter(s=>sellerUse[s.seller]).reduce((sum,s)=>sum+s.shipping,0);
         const diagnostics=saved.diagnostics?.map(seller=>({...seller,rows:seller.rows.map(row=>{
           const original=planSellers.find(s=>s.seller===seller.seller)?.offers.find(o=>o.key===row.key);
-          return original&&hasMasterAttempt(cartKey(original))?{...row,status:"Añadida al carrito anteriormente",detail:""}:row;
+          return original&&hasMasterAttempt(cartKey(original),attempts)?{...row,status:"Añadida al carrito anteriormente",detail:""}:row;
         })}))||[];
         return {...saved,diagnostics,processedAll:!!saved.best?.coverage&&!Object.keys(selected).length,best:Object.keys(selected).length?
           {...saved.best,coverage:Object.keys(selected).length,selected,sellerUse,chosen:Object.keys(sellerUse),
@@ -3484,6 +3488,17 @@
         .filter(o => ["GOOD","OK"].includes(o.v.status));
     }
 
+    const offersBySeller=new Map();
+    for(const [key,offers] of Object.entries(acceptableByKey))for(const offer of offers){
+      let cards=offersBySeller.get(offer.seller);
+      if(!cards)offersBySeller.set(offer.seller,cards=new Map());
+      if(!cards.has(key)||offer.price_eur<cards.get(key).price_eur)cards.set(key,offer);
+    }
+    let yieldedAt=performance.now();
+    async function yieldPlan(){
+      if(performance.now()-yieldedAt>=12){await sleep(0);yieldedAt=performance.now()}
+    }
+
     // Base-only mode: concentration first.
     // Start from a single anchor seller, then add sellers ONLY when the
     // value/savings they contribute economically justify their extra shipping.
@@ -3558,17 +3573,20 @@
       // Greedy fallback: iteratively choose seller with best added-card value.
       const uncovered = new Set(Object.keys(acceptableByKey));
       const chosen = [];
+      const chosenNames=new Set();
       const selected = {};
       let runningTotal = 0;
 
       while (uncovered.size) {
         let pick = null;
+        let sellerStep=0;
         for (const s of sellers) {
-          if (chosen.includes(s.seller)) continue;
+          if(++sellerStep%32===0)await yieldPlan();
+          if (chosenNames.has(s.seller)) continue;
           let added = [];
           let cost = Number(s.shipping||0);
           for (const k of uncovered) {
-            const offer = acceptableByKey[k]?.filter(o=>o.seller===s.seller).sort((a,b)=>a.price_eur-b.price_eur)[0];
+            const offer = offersBySeller.get(s.seller)?.get(k);
             if (offer) { added.push([k,offer]); cost += offer.price_eur||0; }
           }
           if(masterSellers){
@@ -3601,7 +3619,7 @@
           if (!pick || score > pick.score) pick = {seller:s.seller,added,cost,score,strategicValue};
         }
         if (!pick) break;
-        chosen.push(pick.seller);
+        chosen.push(pick.seller);chosenNames.add(pick.seller);
         runningTotal += pick.cost;
         for (const [k,o] of pick.added) {
           selected[k]=o; uncovered.delete(k);
