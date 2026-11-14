@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Cardmarket Helper Loader
 // @namespace    https://github.com/franktlp/cmhelper
-// @version      1.5.7
+// @version      1.6.0
 // @description  Cardmarket Helper con Wants, Master Sets, portes compartidos y planes persistentes
 // @author       franktlp
 // @match        https://www.cardmarket.com/*/Pokemon/*
@@ -21,7 +21,7 @@
   const workbookURL=/^https:\/\/pokecottagecdn\.com\/mastersets\/downloads\/PokeCottage-[A-Z0-9]+(?:-[A-Z0-9]+)*-Master-Set-Checklist\.xlsx$/;
   const page=typeof unsafeWindow!=='undefined'?unsafeWindow:window;
   if(page.__cmHelperLoaderActive)return;
-  page.__cmHelperLoaderActive='1.5.7';
+  page.__cmHelperLoaderActive='1.6.0';
   page.__cmMasterFetchPokeCottage=url=>new Promise((resolve,reject)=>{
     if(typeof GM_xmlhttpRequest!=='function'){reject(new Error('Permiso GM_xmlhttpRequest no disponible en Tampermonkey'));return}
     if(typeof url!=='string'||url.length>220||!workbookURL.test(url)){reject(new Error('Checklist de PokéCottage no autorizada'));return}
@@ -40,14 +40,15 @@
   });
   const BASE='https://raw.githubusercontent.com/franktlp/cmhelper/main/';
   // Load all modules from the same verified release.
-  const RELEASE='a2457929f52dfcfe8a81145d2560ceb969222423';
+  const RELEASE='4357278ada4b9b59e1bb6175f564a3f55247d05a';
   const PINNED={
     'cardmarket-helper.js':RELEASE,
     'cardmarket-id-catalog.js':RELEASE,
     'master-set-data-adapter.js':RELEASE,
     'master-set-registry.json':RELEASE,
     'master-set-ui.js':RELEASE,
-    'pokecottage-xlsx-adapter.js':RELEASE
+    'pokecottage-xlsx-adapter.js':RELEASE,
+    'cardmarket-shipping-probe.js':RELEASE
   };
   async function load(name,label){
     const url=(PINNED[name]?'https://raw.githubusercontent.com/franktlp/cmhelper/'+PINNED[name]+'/':BASE)+name+'?ts='+Date.now();
@@ -78,6 +79,8 @@
       page.__cmMasterRegistry=registry;
       try { await load('pokecottage-xlsx-adapter.js','PokéCottage XLSX'); }
       catch(e) { console.warn('Lector XLSX no disponible; la interfaz seguirá funcionando',e); }
+      try{await load('cardmarket-shipping-probe.js','Portes observados')}
+      catch(e){console.warn('Comprobación de portes no disponible',e)}
       await load('master-set-ui.js','master UI');
     }catch(e){console.warn('Master Sets no se pudo cargar',e)}
   }catch(e){
