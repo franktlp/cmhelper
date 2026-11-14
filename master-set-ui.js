@@ -1,4 +1,4 @@
-/* Master Set Manager UI 1.5.7 — integrated with Cardmarket Helper.
+/* Master Set Manager UI 1.6.0 — integrated with Cardmarket Helper.
  * Requires CMMasterData, CMPokeCottageXLSX and the Helper search/cart module.
  */
 (()=>{'use strict';
@@ -51,15 +51,16 @@ function supportsGrand(config){
 function mount(){if(document.getElementById('cm-master-ui'))return;const p=el('section',{id:'cm-master-ui'});p.style='padding:4px 0;color:#202020;font:14px Arial,sans-serif';
 document.getElementById('cm-master-host').append(p);
 let searchController;
+let shippingController;
 let sessionData;
 let refreshShippingView;
 const lifecycle=new AbortController();
 const detached=new MutationObserver(()=>{
-  if(!p.isConnected){searchController?.abort();lifecycle.abort();detached.disconnect()}
+  if(!p.isConnected){searchController?.abort();shippingController?.abort();lifecycle.abort();detached.disconnect()}
 });
 detached.observe(document.body,{childList:true,subtree:true});
 const head=el('div');head.style='margin:8px 0;font-size:12px;color:#666';
-head.append(el('span',{},'Master Sets · 1.5.7'));p.append(head);
+head.append(el('span',{},'Master Sets · 1.6.0'));p.append(head);
 const context=el('div');context.style='margin:10px 0;padding:8px;background:#f1f3f5;border-radius:6px;font-size:13px';p.append(context);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
 const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');const search=el('button',{type:'button',disabled:true},'Buscar faltantes en Cardmarket');actions.append(choose,catalog,search);p.append(actions);
@@ -124,14 +125,14 @@ async function render(){
 async function action(fn){try{search.disabled=true;setMsg('Procesando…');const response=await fn();setMsg(typeof response==='string'?response:JSON.stringify(response));await render();}catch(e){setMsg('Error: '+e.message);console.error('Master Set Manager',e)}}
 window.addEventListener('cm-helper-budget-changed',async()=>{
   const button=document.getElementById('cm-apply-budget');
-  if(searchController||!p.isConnected||!refreshShippingView||button?.disabled)return;
+  if(searchController||shippingController||!p.isConnected||!refreshShippingView||button?.disabled)return;
   if(button)button.disabled=true;
   try{await refreshShippingView()}
   catch(e){setMsg('No se pudo aplicar el presupuesto: '+e.message)}
   finally{if(button)button.disabled=false}
 },{signal:lifecycle.signal});
 window.addEventListener('cm-helper-shipping-changed',()=>{
-  if(!searchController&&p.isConnected&&refreshShippingView){
+  if(!searchController&&!shippingController&&p.isConnected&&refreshShippingView){
     refreshShippingView().catch(e=>setMsg('No se pudo recalcular con los portes: '+e.message));
   }
 },{signal:lifecycle.signal});
@@ -184,6 +185,48 @@ async function showResponse(response,missing,config,restored){
     const analyze=el('button',{type:'button',disabled:!response.covered},'Análisis inteligente');
     const plan=el('div');
     market.append(analyze,shipping,plan);
+    const pendingProbe=window.CMShippingProbe?.pending();
+    const calibrate=el('button',{id:'cm-master-calibrate-shipping',type:'button',disabled:!window.CMShippingProbe},pendingProbe?'Retirar carta de prueba pendiente':'Comprobar portes antes de elegir');
+    const calibrationStatus=el('p');
+    const previousCalibration=data.calibration;
+    if(previousCalibration){
+      calibrationStatus.textContent=(previousCalibration.observed?.length||0)+' vendedores comprobados con portes de Cardmarket.'+
+        (previousCalibration.unverified?.length?' Quedan '+previousCalibration.unverified.length+' vendedores del plan sin comprobar.':'')+
+        (previousCalibration.stopped?' '+previousCalibration.stopped:'');
+      for(const failure of previousCalibration.failures||[])calibrationStatus.append(el('div',{},failure.seller+': '+failure.reason));
+    }
+    if(pendingProbe)calibrationStatus.textContent='Hay una carta de prueba pendiente de retirar: '+pendingProbe.seller+' · artículo '+pendingProbe.id+'. Resuelve esto antes de añadir otro lote.';
+    market.insertBefore(calibrate,plan);market.insertBefore(calibrationStatus,plan);
+    calibrate.onclick=async()=>{
+      if(shippingController){shippingController.abort();calibrate.disabled=true;calibrationStatus.textContent='Deteniendo después de retirar la carta de prueba…';return}
+      if(window.CMShippingProbe.pending()){
+        calibrate.disabled=true;
+        try{
+          await response.recoverShippingProbe();data.calibration=null;data.analysis=null;data.scan=response.snapshot();
+          await persistSession(config,data);await showResponse(response,missing,config,{...data,recalculate:true});
+        }
+        catch(e){calibrationStatus.textContent=e.message}
+        finally{calibrate.disabled=false}
+        return;
+      }
+      if(!confirm('¿Comprobar los portes de los vendedores candidatos? Se añadirá y retirará una carta de prueba por vendedor. Si ya hay cartas suyas en el carrito, solo se leerán sus portes. No se comprará nada.'))return;
+      shippingController=new AbortController();
+      analyze.disabled=shipping.disabled=search.disabled=recoverCart.disabled=true;
+      calibrate.textContent='Detener comprobación de portes';
+      for(const button of plan.querySelectorAll('button, select'))button.disabled=true;
+      try{
+        const result=await response.calibrateShipping({signal:shippingController.signal,onProgress:text=>calibrationStatus.textContent=text});
+        const {analysis,...report}=result;
+        data.calibration=report;data.analysis=analysis;data.scan=response.snapshot();data.feedback=null;
+        await persistSession(config,data);
+      }catch(e){data.calibration={observed:[],failures:[],unverified:[],stopped:'No se pudieron comprobar los portes: '+e.message};calibrationStatus.textContent=data.calibration.stopped}
+      finally{
+        shippingController=null;analyze.disabled=shipping.disabled=search.disabled=recoverCart.disabled=false;
+        calibrate.disabled=false;calibrate.textContent='Comprobar portes antes de elegir';
+      }
+      if(data.calibration)await showResponse(response,missing,config,data);
+    };
+
     const cartStatus=el('p');
     const recoverCart=el('button',{type:'button'},'He vaciado el carrito: recuperar variantes');
     recoverCart.id='cm-master-recover-cart';
@@ -195,7 +238,7 @@ async function showResponse(response,missing,config,restored){
     market.insertBefore(cartStatus,plan);market.insertBefore(recoverCart,plan);
     updateCartStatus();
     recoverCart.onclick=async()=>{
-      if(searchController)return;
+      if(searchController||shippingController)return;
       if(!confirm('¿Has retirado del carrito las cartas de esta colección e idioma? Volverán a incluirse en el análisis. Este botón no vacía el carrito de Cardmarket.'))return;
       recoverCart.disabled=search.disabled=analyze.disabled=shipping.disabled=true;
       try{
@@ -217,7 +260,7 @@ async function showResponse(response,missing,config,restored){
     const sellerDiagnostics=new Map();
     let restoredAnalysis=restored?.analysis&&!restored.recalculate?response.restoreAnalysis(restored.analysis):null;
     analyze.onclick=async()=>{
-      if(searchController)return;
+      if(searchController||shippingController)return;
       analyze.disabled=true;
       plan.textContent='Calculando el mejor reparto…';
       try{
@@ -255,7 +298,7 @@ async function showResponse(response,missing,config,restored){
         const processed=new Set();
         const showPack=()=>{
           const pack=packs.get(sellers.value);
-          cart.disabled=processed.has(sellers.value);
+          cart.disabled=processed.has(sellers.value)||!!window.CMShippingProbe?.pending();
           preview.replaceChildren(el('summary',{},'Ver cartas del vendedor'));
           for(const o of pack)preview.append(el('div',{},o.number+' · '+o.name+' · '+o.variant+' · '+amount(o.price_eur)));
         };
@@ -276,7 +319,7 @@ async function showResponse(response,missing,config,restored){
           const pack=packs.get(seller);
           const total=pack.reduce((sum,o)=>sum+o.price_eur,0);
           if(!confirm('¿Añadir al carrito '+pack.length+' variantes de '+seller+' por '+amount(total)+' en cartas?'))return;
-          cart.disabled=sellers.disabled=search.disabled=analyze.disabled=shipping.disabled=recoverCart.disabled=true;
+          cart.disabled=sellers.disabled=search.disabled=analyze.disabled=shipping.disabled=recoverCart.disabled=calibrate.disabled=true;
           feedback.textContent='Verificando precios y añadiendo las ofertas exactas…';
           try{
             const result=await response.addPack(pack);
@@ -288,7 +331,7 @@ async function showResponse(response,missing,config,restored){
               (result.stopped?' · '+result.stopped:'')+
               (result.skipped?' · Las omitidas ya no coincidían con la oferta revisada o estaban agotadas.':'');
           }catch(e){feedback.textContent='Error: '+e.message}
-          finally{sellers.disabled=search.disabled=analyze.disabled=shipping.disabled=recoverCart.disabled=false;updateCartStatus();showPack()}
+          finally{sellers.disabled=search.disabled=analyze.disabled=shipping.disabled=recoverCart.disabled=calibrate.disabled=false;updateCartStatus();showPack()}
         };
       }catch(e){plan.textContent='Error: '+e.message}
       finally{analyze.disabled=false}
@@ -424,7 +467,7 @@ function installTabs(){
   return true;
 }
 function activateMaster(){if(installTabs())showMode?.('master')}
-window.CMMasterUI={mount:activateMaster,updateCatalog,version:'1.5.7'};
+window.CMMasterUI={mount:activateMaster,updateCatalog,version:'1.6.0'};
 if(!installTabs()){
   const observer=new MutationObserver(()=>{
     if(installTabs())observer.disconnect();

@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "1.5.7";
+  const VERSION = "1.6.0";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -792,11 +792,11 @@
     const value=overrides[norm(seller)]?.value;
     return Number.isFinite(value)&&value>=0?value:Number(fallback)||0;
   }
-  function saveShippingOverrides(changes){
+  function saveShippingOverrides(changes,{notify=true}={}){
     const saved=loadShippingOverrides();
-    for(const {seller,value} of changes){
+    for(const {seller,value,source="manual",measuredAt} of changes){
       if(!Number.isFinite(value)||value<0)throw Error("Portes inválidos para "+seller);
-      saved[norm(seller)]={value,updatedAt:Date.now()};
+      saved[norm(seller)]={value,source,updatedAt:Date.now(),...(measuredAt?{measuredAt}: {})};
     }
     localStorage.setItem(SHIPPING_OVERRIDES_KEY,JSON.stringify(saved));
     const records=loadSellers();
@@ -805,7 +805,7 @@
       if(entry)record.shipping=entry.value;
     }
     saveSellers(records);
-    window.dispatchEvent(new CustomEvent("cm-helper-shipping-changed"));
+    if(notify)window.dispatchEvent(new CustomEvent("cm-helper-shipping-changed"));
   }
 
   const loadSellers = () => {
@@ -2205,11 +2205,12 @@
     const currentShippingOverrides=loadShippingOverrides();
     const shippingChanged=!!restore&&[...offers].some(([key,items])=>
       shippingFor([...items.values()][0].seller,restore.shipping?.[key]??defaultShipping,currentShippingOverrides)!==restore.shipping?.[key]);
-    return {results,checked,issues,stopped,refreshShipping,shippingChanged,
+    const response={results,checked,issues,stopped,refreshShipping,shippingChanged,
       shippingSellers:()=>{
         const overrides=loadShippingOverrides();
         return [...offers].map(([key,items])=>({
         seller:[...items.values()][0].seller,country:saved.get(key)?.country||"",
+        status:overrides[key]?(String(overrides[key].source||"").startsWith("cart-")?"Porte observado":"Porte manual"):"Estimado",
         shipping:shippingFor([...items.values()][0].seller,restore?.shipping?.[key]??saved.get(key)?.shipping??defaultShipping,overrides),
         wantsCount:items.size,wantsValue:[...items.values()].reduce((sum,o)=>sum+o.price_eur,0)
       }))},
@@ -2287,12 +2288,66 @@
         offers:[...offers.values(),...cartOffers.values()].flatMap(items=>[...items.values()]).map(({verify,...o})=>o),
         issues,stopped,checked,staleIds:[...staleIds]
       }),
+      calibrateShipping:options=>navigator.locks?navigator.locks.request("cm-master-cart",()=>calibrateShipping(options)):calibrateShipping(options),
+      recoverShippingProbe:()=>navigator.locks?navigator.locks.request("cm-master-cart",recoverProbe):recoverProbe(),
       get cartProcessedCount(){return Object.keys(readMasterAttempts()).filter(belongsToCartContext).length},
       resetCartProgress:()=>navigator.locks?navigator.locks.request("cm-master-cart",resetCartProgress):resetCartProgress(),
       addPack:pack=>navigator.locks?navigator.locks.request("cm-master-cart",()=>addPack(pack)):addPack(pack),
       get covered(){return new Set(results.flatMap(s=>s.items.map(o=>o.key))).size}};
+    return response;
+    async function recoverProbe(){
+      if(masterCartBusy)throw Error("Ya hay una operación de carrito en curso.");
+      if(!window.CMShippingProbe)throw Error("El módulo de portes no está disponible. Actualiza el script.");
+      masterCartBusy=true;
+      try{return await window.CMShippingProbe.recover(window.CMShippingProbe.createTransport())}
+      finally{masterCartBusy=false}
+    }
+    async function calibrateShipping({onProgress,signal}={}){
+      if(masterCartBusy)throw Error("Ya hay una operación de carrito en curso.");
+      const probe=window.CMShippingProbe;
+      if(!probe)throw Error("El módulo de portes no está disponible. Actualiza el script.");
+      if(probe.pending())throw Error("Hay una carta de prueba pendiente de retirar del carrito.");
+      masterCartBusy=true;
+      const seen=new Set(),observed=[],failures=[];
+      let rounds=0,stopped="";
+      const known=seller=>{
+        const value=loadShippingOverrides()[norm(seller)];
+        return value&&Number.isFinite(value.value)&&(!value.source||value.source==='manual'||Date.now()-(value.measuredAt||0)<24*60*60*1000);
+      };
+      const choices=analysis=>{
+        const bySeller=new Map();
+        for(const selected of Object.values(analysis.best?.selected||{})){
+          const offer=selected.original||selected;
+          if(offer.article_id&&(!bySeller.has(offer.seller)||offer.price_eur<bySeller.get(offer.seller).price_eur))bySeller.set(offer.seller,offer);
+        }
+        return [...bySeller.values()];
+      };
+      try{
+        for(;rounds<3;rounds++){
+          if(signal?.aborted){stopped="Comprobación detenida";break}
+          const analysis=await response.analyze();
+          const remaining=choices(analysis).filter(o=>!known(o.seller)&&!seen.has(norm(o.seller)));
+          if(!remaining.length)break;
+          if(seen.size>=25){stopped="Se alcanzó el límite de 25 vendedores por comprobación";break}
+          const candidates=remaining.slice(0,25-seen.size);
+          candidates.forEach(o=>seen.add(norm(o.seller)));
+          const result=await probe.run({candidates,signal,
+            onProgress:text=>onProgress?.('Ronda '+(rounds+1)+' · '+text),
+            verify:async offer=>{const valid=await offer.verify(offer);if(!valid)staleIds.add(offer.article_id);return valid},
+            add:async offer=>{const token=await getCurrentCartToken(offer.url);await addArticleToCart(offer.article_id,token,1,offer.url,{shippingProbe:true})},
+            onObserved:observation=>{saveShippingOverrides([observation],{notify:false});observed.push(observation)}
+          });
+          failures.push(...result.failures);
+          if(result.stopped){stopped="Comprobación detenida";break}
+        }
+      }catch(e){stopped=e.message}
+      finally{masterCartBusy=false}
+      const analysis=await response.analyze();
+      return {analysis,rounds,observed,failures,stopped,pending:!!probe.pending(),unverified:choices(analysis).filter(o=>!known(o.seller)).map(o=>o.seller)};
+    }
     async function addPack(pack){
         if(masterCartBusy)throw Error("Ya se está añadiendo un lote.");
+        if(window.CMShippingProbe?.pending())throw Error("Retira la carta de prueba pendiente antes de añadir un lote.");
         const allowed=new Set(planSellers.flatMap(s=>s.offers));
         const packKeys=new Set();
         const pending=pack.map(o=>o.original).filter(o=>{
@@ -2433,7 +2488,8 @@
     if(!updatedRows&&!systemText&&!resultType) return {ok:false,type:"unknown_response",message:"Cardmarket respondió HTTP 200 pero sin confirmación reconocible."};
     return {ok:true,type:resultType||"ok",message:systemText,updatedRows};
   }
-  async function addArticleToCart(articleId,token,amount=1,referrerUrl="") {
+  async function addArticleToCart(articleId,token,amount=1,referrerUrl="",{shippingProbe=false}={}) {
+    if(!shippingProbe&&window.CMShippingProbe?.pending())throw Error("Hay una carta de prueba pendiente de retirar del carrito.");
     const form=new FormData(); form.append("__cmtkn",token);
     form.append("idArticle",JSON.stringify({[articleId]:articleId}));
     form.append("amount",JSON.stringify({[articleId]:String(amount)}));
