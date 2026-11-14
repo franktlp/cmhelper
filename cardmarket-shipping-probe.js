@@ -1,8 +1,6 @@
-/* Shipping calibration through the authenticated cart. Never checks out an order.
- * Cart structure references: shipment-block/seller-info/summary and the native
- * ShoppingCart_RemoveArticle form, as used by the independent cart tools at
- * https://greasyfork.org/en/scripts/493868-cardmarket-compare-items-in-shopping-cart/code
- * No fabricated remove payloads: use the exact form delivered by Cardmarket.
+/* Read shipping from the existing authenticated cart. This module never adds
+ * cards. Native removal is retained only for explicit recovery of a pending
+ * test card created by release 1.6.0. Normal shipping updates issue GET only.
  */
 (()=>{'use strict';
 if(window.CMShippingProbe)return;
@@ -31,7 +29,7 @@ function formArticleId(form){
   }
   return ids.size===1?[...ids][0]:null;
 }
-function parseCart(doc){
+function parseCart(doc,{shippingOnly=false}={}){
   if(doc.querySelector('input[type="password"]')||/just a moment|verify you are human|captcha|checking your browser/i.test(doc.title||''))throw Error('Cardmarket pide iniciar sesión o verificar el navegador.');
   const content=doc.querySelector('.shopping-cart-content');
   if(!content)throw Error('No se reconoce la página del carrito: falta el contenedor esperado.');
@@ -52,7 +50,7 @@ function parseCart(doc){
     }
     const uniqueCosts=new Set(costs),shipping=uniqueCosts.size===1?[...uniqueCosts][0]:null;
     const articles=new Map();
-    for(const row of block.querySelectorAll('tr[data-product-id]')){
+    for(const row of shippingOnly?[]:block.querySelectorAll('tr[data-product-id]')){
       if(row.closest('[hidden], .d-none'))continue;
       const forms=[...row.querySelectorAll('form[data-ajax-action="ShoppingCart_RemoveArticle"]')];
       const form=forms.length===1?forms[0]:null;
@@ -63,7 +61,7 @@ function parseCart(doc){
       if(articles.has(id))throw Error('El carrito contiene filas duplicadas que no puedo distinguir.');
       articles.set(id,{id,amount,form});
     }
-    if(!articles.size)throw Error('No puedo leer las cartas de un envío del carrito.');
+    if(!shippingOnly&&!articles.size)throw Error('No puedo leer las cartas de un envío del carrito.');
     shipments.set(key,{seller,shipping,articles});
   }
   if(!shipments.size&&!/carrito(?:\s+de\s+la\s+compra)?\s+(?:est[aá]\s+)?vac[ií]o|(?:shopping\s+)?cart\s+is\s+empty|no\s+(?:hay\s+)?art[ií]culos\s+en\s+(?:el|tu)\s+carrito/i.test(content.textContent))throw Error('No puedo confirmar que el carrito esté vacío.');
@@ -84,7 +82,7 @@ function createTransport(){
     return html;
   }
   return {
-    read:async()=>parseCart(new DOMParser().parseFromString(await request(cartURL.href),'text/html')),
+    read:async({shippingOnly=false}={})=>parseCart(new DOMParser().parseFromString(await request(cartURL.href),'text/html'),{shippingOnly}),
     remove:async(article,cart)=>{
       const form=article.form;
       if(!form||formArticleId(form)!==article.id||form.dataset.ajaxAction!=='ShoppingCart_RemoveArticle')throw Error('No se reconoce el control para retirar solo la carta de prueba.');
@@ -113,41 +111,17 @@ async function recover(transport){
   }
   localStorage.removeItem(PENDING);return true;
 }
-async function run({candidates,add,verify,transport=createTransport(),signal,onProgress,onObserved}){
-  if(pending())throw Error('Hay una carta de prueba pendiente de retirar. Resuélvela antes de comprobar otro vendedor.');
+async function readExisting({transport=createTransport(),signal,onProgress}={}){
+  if(signal?.aborted)return {observed:[],failures:[],stopped:true};
+  onProgress?.('Leyendo los portes de los vendedores que ya están en el carrito…');
+  const cart=await transport.read({shippingOnly:true});
+  if(signal?.aborted)return {observed:[],failures:[],stopped:true};
   const observed=[],failures=[];
-  for(let i=0;i<candidates.length;i++){
-    if(signal?.aborted)break;
-    const offer=candidates[i];onProgress?.('Comprobando '+(i+1)+'/'+candidates.length+' · '+offer.seller);
-    const before=await transport.read(),existing=before.shipments.get(norm(offer.seller));
-    if(existing){
-      if(existing.shipping===null){failures.push({seller:offer.seller,reason:'No se pudo leer el porte del envío existente'});continue}
-      const observation={seller:offer.seller,value:existing.shipping,source:'cart-existing',measuredAt:Date.now()};observed.push(observation);await onObserved?.(observation);continue;
-    }
-    if(!offer.article_id||!await verify(offer)){failures.push({seller:offer.seller,reason:'La carta de prueba ya no coincide con la oferta'});continue}
-    if(signal?.aborted)break;
-    const job={id:String(offer.article_id),seller:offer.seller,createdAt:Date.now(),before:signature(before)};
-    localStorage.setItem(PENDING,JSON.stringify(job));
-    let value=null,error=null;
-    try{
-      await add(offer);
-      const after=await transport.read(),shipment=after.shipments.get(norm(offer.seller));
-      const article=shipment?.articles.get(job.id);
-      if(!article||article.amount!==1||shipment.articles.size!==1)throw Error('No pude verificar la carta de prueba en el carrito.');
-      value=shipment.shipping;
-      if(value===null)throw Error('No pude leer los portes calculados por Cardmarket.');
-    }catch(e){error=e}
-    // Cleanup also runs after cancellation, an unknown add response, or a parse error.
-    try{await recover(transport)}catch(e){throw Error(e.message+' Carta de prueba: '+offer.seller+' · artículo '+job.id+'. Revisa el carrito antes de continuar.')}
-    const final=await transport.read();
-    if(signature(final)!==job.before)throw Error('El contenido del carrito cambió durante la comprobación. Se ha detenido la ronda.');
-    if(error){
-      if(/HTTP\s*(?:403|429)|ANTIBOT|verificaci/i.test(error.message))throw error;
-      failures.push({seller:offer.seller,reason:error.message});continue;
-    }
-    const observation={seller:offer.seller,value,source:'cart-probe',measuredAt:Date.now()};observed.push(observation);await onObserved?.(observation);
+  for(const shipment of cart.shipments.values()){
+    if(shipment.shipping===null)failures.push({seller:shipment.seller,reason:'No se pudo leer un importe de envío único'});
+    else observed.push({seller:shipment.seller,value:shipment.shipping,source:'cart-existing',measuredAt:Date.now()});
   }
-  return {observed,failures,stopped:!!signal?.aborted};
+  return {observed,failures,stopped:false};
 }
-window.CMShippingProbe={parseCart,formArticleId,signature,pending,createTransport,recover,run,version:'0.1.0'};
+window.CMShippingProbe={parseCart,formArticleId,signature,pending,createTransport,recover,readExisting,version:'0.2.0'};
 })();

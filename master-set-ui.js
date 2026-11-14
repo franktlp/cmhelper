@@ -1,4 +1,4 @@
-/* Master Set Manager UI 1.6.0 — integrated with Cardmarket Helper.
+/* Master Set Manager UI 1.6.1 — integrated with Cardmarket Helper.
  * Requires CMMasterData, CMPokeCottageXLSX and the Helper search/cart module.
  */
 (()=>{'use strict';
@@ -60,7 +60,7 @@ const detached=new MutationObserver(()=>{
 });
 detached.observe(document.body,{childList:true,subtree:true});
 const head=el('div');head.style='margin:8px 0;font-size:12px;color:#666';
-head.append(el('span',{},'Master Sets · 1.6.0'));p.append(head);
+head.append(el('span',{},'Master Sets · 1.6.1'));p.append(head);
 const context=el('div');context.style='margin:10px 0;padding:8px;background:#f1f3f5;border-radius:6px;font-size:13px';p.append(context);
 const controls=el('div');controls.style='display:flex;gap:8px;margin:12px 0';const lang=el('select'),tier=el('select');[['es','Español'],['en','Inglés']].forEach(([v,t])=>lang.append(el('option',{value:v},t)));[['master','Master'],['grand','Grand Master']].forEach(([v,t])=>tier.append(el('option',{value:v},t)));lang.value=state.lang;tier.value=state.tier;controls.append(lang,tier);p.append(controls);
 const actions=el('div');actions.style='display:flex;gap:6px;flex-wrap:wrap';const choose=el('button',{type:'button'},'Actualizar CSV TCGCollector'),catalog=el('button',{type:'button'},'Actualizar PokéCottage');const search=el('button',{type:'button',disabled:true},'Buscar faltantes en Cardmarket');actions.append(choose,catalog,search);p.append(actions);
@@ -186,11 +186,11 @@ async function showResponse(response,missing,config,restored){
     const plan=el('div');
     market.append(analyze,shipping,plan);
     const pendingProbe=window.CMShippingProbe?.pending();
-    const calibrate=el('button',{id:'cm-master-calibrate-shipping',type:'button',disabled:!window.CMShippingProbe},pendingProbe?'Retirar carta de prueba pendiente':'Comprobar portes antes de elegir');
+    const calibrate=el('button',{id:'cm-master-calibrate-shipping',type:'button',disabled:!window.CMShippingProbe},pendingProbe?'Retirar carta de prueba pendiente':'Actualizar portes desde el carrito');
     const calibrationStatus=el('p');
     const previousCalibration=data.calibration;
     if(previousCalibration){
-      calibrationStatus.textContent=(previousCalibration.observed?.length||0)+' vendedores comprobados con portes de Cardmarket.'+
+      calibrationStatus.textContent=(previousCalibration.observed?.length||0)+' vendedores con portes leídos del carrito.'+
         (previousCalibration.unverified?.length?' Quedan '+previousCalibration.unverified.length+' vendedores del plan sin comprobar.':'')+
         (previousCalibration.stopped?' '+previousCalibration.stopped:'');
       for(const failure of previousCalibration.failures||[])calibrationStatus.append(el('div',{},failure.seller+': '+failure.reason));
@@ -198,7 +198,7 @@ async function showResponse(response,missing,config,restored){
     if(pendingProbe)calibrationStatus.textContent='Hay una carta de prueba pendiente de retirar: '+pendingProbe.seller+' · artículo '+pendingProbe.id+'. Resuelve esto antes de añadir otro lote.';
     market.insertBefore(calibrate,plan);market.insertBefore(calibrationStatus,plan);
     calibrate.onclick=async()=>{
-      if(shippingController){shippingController.abort();calibrate.disabled=true;calibrationStatus.textContent='Deteniendo después de retirar la carta de prueba…';return}
+      if(shippingController){shippingController.abort();calibrate.disabled=true;calibrationStatus.textContent='Deteniendo la lectura del carrito…';return}
       if(window.CMShippingProbe.pending()){
         calibrate.disabled=true;
         try{
@@ -209,20 +209,19 @@ async function showResponse(response,missing,config,restored){
         finally{calibrate.disabled=false}
         return;
       }
-      if(!confirm('¿Comprobar los portes de los vendedores candidatos? Se añadirá y retirará una carta de prueba por vendedor. Si ya hay cartas suyas en el carrito, solo se leerán sus portes. No se comprará nada.'))return;
       shippingController=new AbortController();
       analyze.disabled=shipping.disabled=search.disabled=recoverCart.disabled=true;
-      calibrate.textContent='Detener comprobación de portes';
+      calibrate.textContent='Detener lectura de portes';
       for(const button of plan.querySelectorAll('button, select'))button.disabled=true;
       try{
         const result=await response.calibrateShipping({signal:shippingController.signal,onProgress:text=>calibrationStatus.textContent=text});
         const {analysis,...report}=result;
         data.calibration=report;data.analysis=analysis;data.scan=response.snapshot();data.feedback=null;
         await persistSession(config,data);
-      }catch(e){data.calibration={observed:[],failures:[],unverified:[],stopped:'No se pudieron comprobar los portes: '+e.message};calibrationStatus.textContent=data.calibration.stopped}
+      }catch(e){data.calibration={observed:[],failures:[],unverified:[],stopped:'No se pudieron leer los portes: '+e.message};calibrationStatus.textContent=data.calibration.stopped}
       finally{
         shippingController=null;analyze.disabled=shipping.disabled=search.disabled=recoverCart.disabled=false;
-        calibrate.disabled=false;calibrate.textContent='Comprobar portes antes de elegir';
+        calibrate.disabled=false;calibrate.textContent='Actualizar portes desde el carrito';
       }
       if(data.calibration)await showResponse(response,missing,config,data);
     };
@@ -467,7 +466,7 @@ function installTabs(){
   return true;
 }
 function activateMaster(){if(installTabs())showMode?.('master')}
-window.CMMasterUI={mount:activateMaster,updateCatalog,version:'1.6.0'};
+window.CMMasterUI={mount:activateMaster,updateCatalog,version:'1.6.1'};
 if(!installTabs()){
   const observer=new MutationObserver(()=>{
     if(installTabs())observer.disconnect();

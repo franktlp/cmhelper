@@ -5,13 +5,6 @@ const source=fs.readFileSync(path.join(__dirname,'../cardmarket-shipping-probe.j
 const empty='<div class="shopping-cart-content">Tu carrito está vacío</div>';
 const block=(seller,id,amount=1,cost='4,20')=>`<div class="shipment-block"><div class="seller-info"><a href="/es/Pokemon/Users/${seller}">${seller}</a></div><div class="summary"><div><span>Valor del pedido</span><span>0,02 €</span></div><div><span>Gastos de envío</span><span>${cost} €</span></div><div><span>Total</span><span>99,99 €</span></div></div><table><tbody><tr data-product-id="42"><td class="amount">${amount}x</td><td class="name">A card</td><td><form data-ajax-action="ShoppingCart_RemoveArticle"><input name="idArticle" value="${id}"><input name="__cmtkn" value="not-exported"></form></td></tr></tbody></table></div>`;
 function setup(){const dom=new JSDOM('',{url:'https://www.cardmarket.com/es/Pokemon/Products/Singles/30th-Celebration',runScripts:'dangerously'});dom.window.eval(source);return {dom,w:dom.window,api:dom.window.CMShippingProbe}}
-function fake(env,{existing=false,failRemove=false,unknownAdd=false,abort,shippingMissing=false}={}){
- let cart=existing?block('Other',90,2):'',adds=0,removes=0;
- const parse=()=>env.api.parseCart(new env.w.DOMParser().parseFromString(cart?'<div class="shopping-cart-content">'+cart+'</div>':empty,'text/html'));
- const transport={read:async()=>parse(),remove:async(article)=>{removes++;if(!failRemove)cart=cart.replace(block('SellerA',101,1,shippingMissing?'?':'4,20'),'')}};
- return {transport,verify:async()=>true,add:async()=>{adds++;cart+=block('SellerA',101,1,shippingMissing?'?':'4,20');abort?.abort();if(unknownAdd)throw Error('Unknown add response')},stats:()=>({cart,adds,removes}),fix:()=>{failRemove=false}};
-}
-const offer={seller:'SellerA',article_id:'101',price_eur:.02};
 test('reads only the shipping row, preserves EUR zero, rejects unknown carts and ambiguous amounts',()=>{
  const env=setup();try{
  const parse=html=>env.api.parseCart(new env.w.DOMParser().parseFromString(html,'text/html'));
@@ -24,34 +17,24 @@ test('reads only the shipping row, preserves EUR zero, rejects unknown carts and
  assert.equal(parse('<div class="shopping-cart-content">'+block('A',101).replace('Gastos de envío','Total incorrecto')+'</div>').shipments.get('a').shipping,null);
  }finally{env.w.close()}
 });
-test('adds one test card, observes shipping, removes only that card and preserves the previous cart',async()=>{
- const env=setup();try{const io=fake(env,{existing:true});env.w.localStorage.setItem('cm_master_cart_attempts_v1','{"keep":1}');
- const result=await env.api.run({candidates:[offer],...io});
- assert.equal(result.observed[0].value,4.2);assert.equal(io.stats().adds,1);assert.equal(io.stats().removes,1);assert.equal(io.stats().cart,block('Other',90,2));
- assert.equal(env.api.pending(),null);assert.equal(env.w.localStorage.getItem('cm_master_cart_attempts_v1'),'{"keep":1}');
+test('shipping updates are read-only and do not require article IDs or removal controls',async()=>{
+ const env=setup();try{
+ let reads=0,mutations=0;
+ const html='<div class="shopping-cart-content">'+block('SellerA',101).replace(/<form[\s\S]*?<\/form>/,'')+'</div>';
+ const result=await env.api.readExisting({transport:{read:async options=>{reads++;assert.equal(options.shippingOnly,true);return env.api.parseCart(new env.w.DOMParser().parseFromString(html,'text/html'),options)},remove:async()=>{mutations++;throw Error('No removal allowed')}}});
+ assert.equal(result.observed[0].value,4.2);assert.equal(result.observed[0].source,'cart-existing');assert.equal(reads,1);assert.equal(mutations,0);
+ assert.equal(env.api.run,undefined,'automatic add/remove probe API must be removed');assert.equal(env.api.pending(),null);
  }finally{env.w.close()}
 });
-test('existing seller cart is read without adding or removing anything',async()=>{
- const env=setup();try{let mutations=0;const cart=env.api.parseCart(new env.w.DOMParser().parseFromString('<div class="shopping-cart-content">'+block('SellerA',50,3)+'</div>','text/html'));
- const result=await env.api.run({candidates:[offer],transport:{read:async()=>cart,remove:async()=>mutations++},verify:async()=>{throw Error('Must not verify an extra card')},add:async()=>mutations++});
- assert.equal(result.observed[0].source,'cart-existing');assert.equal(mutations,0);
+test('cancelled reads make no requests, and empty carts produce no observations',async()=>{
+ const env=setup();try{
+ const controller=new env.w.AbortController();controller.abort();
+ const cancelled=await env.api.readExisting({signal:controller.signal,transport:{read:async()=>{throw Error('No request expected')}}});assert.equal(cancelled.stopped,true);
+ const result=await env.api.readExisting({transport:{read:async options=>env.api.parseCart(new env.w.DOMParser().parseFromString(empty,'text/html'),options)}});
+ assert.equal(result.observed.length,0);assert.equal(env.api.pending(),null);
  }finally{env.w.close()}
 });
-test('unknown add responses and unreadable prices still clean up, and never produce an observation',async()=>{
- for(const options of [{unknownAdd:true},{shippingMissing:true}]){const env=setup();try{const io=fake(env,options);const result=await env.api.run({candidates:[offer],...io});
- assert.equal(result.observed.length,0);assert.equal(result.failures.length,1);assert.equal(io.stats().removes,1);assert.equal(env.api.pending(),null);
- }finally{env.w.close()}}
-});
-test('cancel waits for cleanup; a failed cleanup persists and blocks the next probe until recovered',async()=>{
- const env=setup();try{const controller=new env.w.AbortController(),io=fake(env,{abort:controller});
- const result=await env.api.run({candidates:[offer,{...offer,seller:'Second'}],signal:controller.signal,...io});
- assert.equal(result.stopped,true);assert.equal(io.stats().adds,1);assert.equal(io.stats().removes,1);
- const failing=fake(env,{failRemove:true});await assert.rejects(env.api.run({candidates:[offer],...failing}),/no confirmó/);
- assert.ok(env.api.pending());await assert.rejects(env.api.run({candidates:[offer],...failing}),/pendiente/);assert.equal(failing.stats().adds,1);
- failing.fix();assert.equal(await env.api.recover(failing.transport),true);assert.equal(env.api.pending(),null);
- }finally{env.w.close()}
-});
-test('actual transport posts the exact native single-article form and verifies removal by reading the cart again',async()=>{
+test('legacy recovery alone may post the native single-article removal form, then verifies it',async()=>{
  const env=setup();try{
  const original=env.w.setTimeout.bind(env.w);env.w.setTimeout=(fn,ms)=>original(fn,Math.min(ms,1));
  const calls=[];let cart=block('SellerA',101);

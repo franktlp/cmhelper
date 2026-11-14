@@ -1,6 +1,6 @@
 
 (async () => {
-  const VERSION = "1.6.0";
+  const VERSION = "1.6.1";
   const STORAGE_KEY = "cm_helper_v540_sellers";
   const MARKET_CACHE_KEY = "cm_helper_v44_market_cache";
   const CATALOG_CACHE_KEY = "cm_helper_v540_product_cache";
@@ -2308,42 +2308,16 @@
       if(!probe)throw Error("El módulo de portes no está disponible. Actualiza el script.");
       if(probe.pending())throw Error("Hay una carta de prueba pendiente de retirar del carrito.");
       masterCartBusy=true;
-      const seen=new Set(),observed=[],failures=[];
-      let rounds=0,stopped="";
-      const known=seller=>{
-        const value=loadShippingOverrides()[norm(seller)];
-        return value&&Number.isFinite(value.value)&&(!value.source||value.source==='manual'||Date.now()-(value.measuredAt||0)<24*60*60*1000);
-      };
-      const choices=analysis=>{
-        const bySeller=new Map();
-        for(const selected of Object.values(analysis.best?.selected||{})){
-          const offer=selected.original||selected;
-          if(offer.article_id&&(!bySeller.has(offer.seller)||offer.price_eur<bySeller.get(offer.seller).price_eur))bySeller.set(offer.seller,offer);
-        }
-        return [...bySeller.values()];
-      };
+      let observed=[],failures=[],stopped="";
       try{
-        for(;rounds<3;rounds++){
-          if(signal?.aborted){stopped="Comprobación detenida";break}
-          const analysis=await response.analyze();
-          const remaining=choices(analysis).filter(o=>!known(o.seller)&&!seen.has(norm(o.seller)));
-          if(!remaining.length)break;
-          if(seen.size>=25){stopped="Se alcanzó el límite de 25 vendedores por comprobación";break}
-          const candidates=remaining.slice(0,25-seen.size);
-          candidates.forEach(o=>seen.add(norm(o.seller)));
-          const result=await probe.run({candidates,signal,
-            onProgress:text=>onProgress?.('Ronda '+(rounds+1)+' · '+text),
-            verify:async offer=>{const valid=await offer.verify(offer);if(!valid)staleIds.add(offer.article_id);return valid},
-            add:async offer=>{const token=await getCurrentCartToken(offer.url);await addArticleToCart(offer.article_id,token,1,offer.url,{shippingProbe:true})},
-            onObserved:observation=>{saveShippingOverrides([observation],{notify:false});observed.push(observation)}
-          });
-          failures.push(...result.failures);
-          if(result.stopped){stopped="Comprobación detenida";break}
-        }
+        const result=await probe.readExisting({signal,onProgress});
+        observed=result.observed;failures=result.failures;
+        if(observed.length)saveShippingOverrides(observed,{notify:false});
+        if(result.stopped)stopped="Lectura detenida";
       }catch(e){stopped=e.message}
       finally{masterCartBusy=false}
       const analysis=await response.analyze();
-      return {analysis,rounds,observed,failures,stopped,pending:!!probe.pending(),unverified:choices(analysis).filter(o=>!known(o.seller)).map(o=>o.seller)};
+      return {analysis,mode:'cart-read-only',observed,failures,stopped,pending:!!probe.pending()};
     }
     async function addPack(pack){
         if(masterCartBusy)throw Error("Ya se está añadiendo un lote.");
@@ -2488,8 +2462,8 @@
     if(!updatedRows&&!systemText&&!resultType) return {ok:false,type:"unknown_response",message:"Cardmarket respondió HTTP 200 pero sin confirmación reconocible."};
     return {ok:true,type:resultType||"ok",message:systemText,updatedRows};
   }
-  async function addArticleToCart(articleId,token,amount=1,referrerUrl="",{shippingProbe=false}={}) {
-    if(!shippingProbe&&window.CMShippingProbe?.pending())throw Error("Hay una carta de prueba pendiente de retirar del carrito.");
+  async function addArticleToCart(articleId,token,amount=1,referrerUrl="") {
+    if(window.CMShippingProbe?.pending())throw Error("Hay una carta de prueba pendiente de retirar del carrito.");
     const form=new FormData(); form.append("__cmtkn",token);
     form.append("idArticle",JSON.stringify({[articleId]:articleId}));
     form.append("amount",JSON.stringify({[articleId]:String(amount)}));

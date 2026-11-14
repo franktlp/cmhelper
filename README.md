@@ -1,6 +1,6 @@
 # Cardmarket Helper
 
-Helper personal para Pokémon TCG en Cardmarket. La versión estable 1.6.0 reúne Wants y Master Sets en una ventana con pestañas.
+Helper personal para Pokémon TCG en Cardmarket. La versión estable 1.6.1 reúne Wants y Master Sets en una ventana con pestañas.
 
 ## Instalación y actualización
 
@@ -30,15 +30,15 @@ Los vendedores, planes, el CSV importado y las checklists se guardan en IndexedD
 
 La versión estable conserva las claves de almacenamiento de la beta. Para mantener los datos, actualiza el instalador en el mismo navegador y perfil de Cardmarket.
 
-## Portes observados antes de elegir el lote
+## Portes del carrito existente
 
-En Master Sets, **Comprobar portes antes de elegir** analiza las ofertas guardadas y comprueba solo los vendedores candidatos con portes todavía desconocidos. Si el vendedor ya está en el carrito, lee su envío. En los demás casos añade una unidad de prueba, lee los portes y retira esa unidad mediante el formulario de Cardmarket. No realiza compras.
+En Master Sets, **Actualizar portes desde el carrito** hace una sola lectura del carrito de Cardmarket, guarda los portes de los vendedores que ya estén allí y recalcula el plan con las ofertas guardadas. No añade ni retira cartas para estimar portes. Para vendedores ausentes del carrito se conserva el porte manual o estimado.
 
-La comprobación recalcula por rondas solo cuando aparecen vendedores nuevos: hasta tres rondas y 25 vendedores por ejecución. Conserva los portes manuales y reutiliza los observados durante 24 horas. El editor distingue portes observados, manuales y estimados. El coste de una carta es una referencia para el lote; el peso o método de envío puede hacer que el importe definitivo cambie.
+Las pruebas automáticas con cartas de la versión 1.6.0 se han retirado. Solo se conserva **Retirar carta de prueba pendiente** para resolver, mediante una acción explícita, una carta que hubiera quedado pendiente de esa versión. La lectura normal de portes nunca usa esa retirada.
 
-Si no puede confirmar la retirada, conserva el ID del artículo y ofrece **Retirar carta de prueba pendiente**. No inicia otra prueba ni permite añadir otro lote con el Helper hasta resolver esa carta. Detener la comprobación deja terminar la retirada actual. Tras elegir el lote no vuelve a comprobar ni redistribuye las cartas automáticamente.
+El editor distingue portes observados, manuales y estimados. Los importes observados corresponden al carrito en el momento de la lectura y pueden variar al cambiar sus cantidades o el método de envío.
 
-La calibración está probada con carritos simulados, incluidos errores y recuperación. La compatibilidad con el HTML de la sesión real debe comprobarse desde el navegador del usuario; si no reconoce el carrito, muestra el motivo y se detiene.
+La lectura está probada con carritos simulados. La compatibilidad con el HTML de la sesión real debe comprobarse desde el navegador del usuario; si no reconoce el carrito, muestra el motivo.
 
 ## Pruebas
 
